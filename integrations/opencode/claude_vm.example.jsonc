@@ -1,0 +1,13 @@
+{
+  "mcp": {
+    "claude_vm": {
+      "type": "local",
+      "command": ["/absolute/path/to/o-gents/bin/claude-vm-mcp"],
+      "enabled": true,
+      "timeout": 180000,
+      "environment": {
+        "CLAUDE_VM_POLICY": "/absolute/path/to/o-gents/policy.json"
+      }
+    }
+  }
+}

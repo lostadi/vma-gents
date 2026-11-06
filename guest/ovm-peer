@@ -1,0 +1,164 @@
+#!/usr/bin/env python3
+"""Find OVM peers and invoke native Ostadix execution across their overlay."""
+import argparse
+import hashlib
+import ipaddress
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import time
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, ProxyHandler, build_opener
+
+OVERLAY = ipaddress.ip_network("10.87.0.0/16")
+OPENER = build_opener(ProxyHandler({}))
+
+
+def load_context():
+    identity = json.loads(Path("/run/ovm-config/identity.json").read_text())
+    environment = dict(os.environ)
+    environment.update(json.loads(Path("/run/ovm/environment.json").read_text()))
+    environment["PATH"] = "/usr/local/bin:/opt/ostadix-toolchain/bin:" + environment.get("PATH", "/usr/bin:/bin")
+    try:
+        registry = json.loads(Path("/run/ovm-config/peers.json").read_text())
+    except FileNotFoundError:
+        registry = {"scope": "this-controller", "peers": []}
+    if registry.get("networkId", identity["networkId"]) != identity["networkId"]:
+        raise ValueError("Peer registry belongs to another network")
+    return identity, environment, registry
+
+
+def resolve_peer(target, registry):
+    try:
+        address = ipaddress.ip_address(target)
+    except ValueError:
+        matches = [peer for peer in registry.get("peers", []) if peer["guestId"] == target]
+        if len(matches) != 1:
+            raise ValueError("Use one exact guest ID from ovm-peer list, or its 10.87.x.x address")
+        address = ipaddress.ip_address(matches[0]["address"])
+    if address.version != 4 or address not in OVERLAY:
+        raise ValueError("Peer address must belong to the OVM overlay (10.87.0.0/16)")
+    return str(address)
+
+
+def pairing_limits(environment):
+    def seconds(name, default, minimum, maximum):
+        value = environment.get(name, str(default))
+        if not isinstance(value, str) or not value.isascii() or not value.isdecimal() or not minimum <= int(value) <= maximum:
+            raise ValueError(f"{name} must be an integer from {minimum} to {maximum}")
+        return int(value)
+    total = seconds("OVM_PEER_PAIR_TIMEOUT_SECONDS", 90, 5, 600)
+    io = seconds("OVM_PEER_PAIR_IO_SECONDS", min(60, total), 1, 60)
+    if io > total:
+        raise ValueError("OVM_PEER_PAIR_IO_SECONDS must not exceed OVM_PEER_PAIR_TIMEOUT_SECONDS")
+    return {"total": total, "io": io, "offer": min(600, total + 30), "ready": min(30, total)}
+
+
+def native_diagnostic(stderr):
+    # Emit fixed observations and a digest, never a native passcode or key.
+    raw = stderr if isinstance(stderr, bytes) else (stderr or "").encode()
+    lowered = raw.lower()
+    observations = [name for name, needle in (
+        ("authentication-failed", b"pairing authentication failed"),
+        ("incomplete-length-prefix", b"before a complete length prefix"),
+        ("io-would-block", b"resource temporarily unavailable"),
+        ("io-would-block", b"os error 11"),
+        ("deadline-reported", b"timed out"),
+        ("connection-refused", b"connection refused"),
+    ) if needle in lowered]
+    observations = sorted(set(observations))
+    return {"observations": observations, "stderrBytes": len(raw), "stderrSha256": hashlib.sha256(raw).hexdigest()}
+
+
+def request(address, route, payload=None, timeout=15):
+    data = json.dumps(payload).encode() if payload is not None else None
+    message = Request(f"http://{address}:7341{route}", data=data, headers={"Content-Type": "application/json"})
+    with OPENER.open(message, timeout=timeout) as response:
+        value = response.read(16385)
+        if len(value) > 16384:
+            raise ValueError("Peer enrollment response is too large")
+        return json.loads(value)
+
+
+def ensure_pair(address, identity, environment):
+    limits = pairing_limits(environment)
+    started = time.monotonic()
+    deadline = started + limits["total"]
+    def remaining():
+        value = deadline - time.monotonic()
+        if value <= 0:
+            raise RuntimeError(f"Pairing exceeded its {limits['total']} s total deadline; program execution was not dispatched")
+        return value
+    status = request(address, "/status", timeout=min(15, remaining()))
+    if status.get("networkId") != identity["networkId"] or status.get("address") != address:
+        raise ValueError("Peer's network identity does not match the requested target")
+    node_id = status.get("nodeId")
+    if not isinstance(node_id, str) or not node_id or any(character not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-" for character in node_id):
+        raise ValueError("Peer returned an invalid native node identity")
+    metadata = Path(environment["XDG_CONFIG_HOME"]) / "ostadix/peers" / node_id / "peer.json"
+    if metadata.is_file():
+        stored = json.loads(metadata.read_text())
+        if stored.get("node_id") == node_id and stored.get("address", "").split(":")[0] == address:
+            return node_id
+    while True:
+        try:
+            offer = request(address, "/pair", {"networkId": identity["networkId"]}, timeout=min(limits["ready"] + 5, remaining()))
+            break
+        except HTTPError as error:
+            if error.code != 409:
+                raise
+            error.close()
+            time.sleep(min(0.5, remaining()))
+    if offer.get("nodeId") != node_id or offer.get("networkId") != identity["networkId"] or offer.get("port") != 7340:
+        raise ValueError("Native pairing offer changed target identity")
+    passcode = offer.get("passcode")
+    if not isinstance(passcode, str) or not passcode or len(passcode) > 256 or "\n" in passcode or "\r" in passcode:
+        raise ValueError("Peer returned an invalid one-use passcode")
+    # Native pairing preserves distinct private keys and pins reciprocal public identities.
+    try:
+        paired = subprocess.run(["o-node", "pair", node_id, "--address", f"{address}:7340", "--passcode-stdin", "--io-timeout-seconds", str(limits["io"])], input=passcode + "\n", env=environment, text=True, capture_output=True, timeout=remaining())
+    except subprocess.TimeoutExpired as error:
+        diagnostic = native_diagnostic(error.stderr)
+        raise RuntimeError(f"Pairing exceeded its {limits['total']} s total deadline; native pairing may be partial; program execution was not dispatched; " + json.dumps(diagnostic, sort_keys=True)) from None
+    if paired.returncode:
+        diagnostic = native_diagnostic(paired.stderr)
+        raise RuntimeError(f"Native reciprocal pairing failed (exit {paired.returncode}, elapsed {time.monotonic() - started:.3f} s, I/O deadline {limits['io']} s); program execution was not dispatched; " + json.dumps(diagnostic, sort_keys=True))
+    return node_id
+
+
+def main():
+    parser = argparse.ArgumentParser(description="List OVM peers, pair their native Ostadix nodes, or run an O document remotely. Peers must be running.")
+    sub = parser.add_subparsers(dest="command", required=True)
+    sub.add_parser("list", help="List issued identities on this controller; this does not imply they are online")
+    for command in ("pair", "status"):
+        item = sub.add_parser(command)
+        item.add_argument("peer", help="Exact guest ID or 10.87.x.x address")
+    item = sub.add_parser("run", help="Pair if needed, then execute one O document through native octl")
+    item.add_argument("peer")
+    item.add_argument("source", help="O document filename, or - for stdin")
+    item.add_argument("args", nargs=argparse.REMAINDER, help="Additional native octl node run options")
+    args = parser.parse_args()
+    identity, environment, registry = load_context()
+    if args.command == "list":
+        print(json.dumps({"networkId": identity["networkId"], "self": identity["address"], "scope": registry.get("scope"), "onlineChecked": False, "peers": registry["peers"]}, indent=2))
+        return 0
+    address = resolve_peer(args.peer, registry)
+    if args.command == "status":
+        print(json.dumps(request(address, "/status"), indent=2))
+        return 0
+    node_id = ensure_pair(address, identity, environment)
+    if args.command == "pair":
+        print(f"Paired with {node_id} at {address}")
+        return 0
+    # Never retry remote execution: transport failure may leave completion unknown.
+    return subprocess.call(["octl", "node", "run", args.source, "--node", node_id, *args.args], env=environment)
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except (OSError, ValueError, RuntimeError, HTTPError, URLError, subprocess.SubprocessError) as error:
+        print(f"ovm-peer: {error}", file=sys.stderr)
+        sys.exit(1)

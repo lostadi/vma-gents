@@ -1,0 +1,6 @@
+{
+  "source": "Built-in Ubuntu guest /etc/apparmor.d/sbin.dhclient, read during the October 4 2026 failed-boot investigation. Brace alternatives expanded below.",
+  "configRead": ["/etc/dhcp/**"],
+  "leaseWrite": ["/var/lib/dhcp/dhclient*", "/var/lib/dhcp3/dhclient*", "/run/dhclient*.lease*", "/var/run/dhclient*.lease*"],
+  "pidWrite": ["/run/dhclient*.pid", "/var/run/dhclient*.pid"]
+}

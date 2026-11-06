@@ -1,0 +1,2 @@
+FROM hf.co/okenk/Huihui-Spark-X2.5-4B-abliterated-GGUF:Q4_K_M
+PARAMETER num_ctx 32768

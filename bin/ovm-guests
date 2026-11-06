@@ -1,0 +1,10 @@
+#!/usr/bin/env node
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { runGuestsCli } from "../src/guest-manager.mjs";
+
+const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+runGuestsCli(process.argv.slice(2), { projectRoot }).then(
+  (code) => { process.exitCode = code; },
+  (error) => { process.stderr.write(`ovm guests: ${error.message}\n`); process.exitCode = 1; },
+);

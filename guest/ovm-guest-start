@@ -1,0 +1,250 @@
+#!/usr/bin/env python3
+"""Bring up the network and a unique Ostadix node in any OVM boot mode."""
+import hashlib
+import fcntl
+import ipaddress
+import json
+import os
+from pathlib import Path
+import subprocess
+import re
+import sys
+import time
+
+DHCLIENT_CONFIG = Path("/etc/dhcp/dhclient-ovm.conf")
+DHCLIENT_LEASES = Path("/var/lib/dhcp/dhclient-ovm.leases")
+DHCLIENT_PID = Path("/run/dhclient-ovm.pid")
+
+def run(*args, check=True, **kwargs):
+    return subprocess.run(args, check=check, text=True, **kwargs)
+
+def mount(kind, source, target):
+    Path(target).mkdir(parents=True, exist_ok=True)
+    if run("mountpoint", "-q", target, check=False).returncode:
+        run("mount", "-t", kind, source, target)
+
+def peer_ready(address):
+    listeners = run("ss", "-H", "-ltn", capture_output=True).stdout
+    return bool(re.search(r"\b" + re.escape(address) + r"(?:%[^\s:]+)?:7341\b", listeners))
+
+def dhcp_router(leases, interface):
+    """Use the newest lease for this NIC, never a previous NIC's router."""
+    matching = []
+    for lease in re.findall(r"\blease\s*\{([^{}]*)\}", leases):
+        name = re.search(r'^\s*interface\s+"([^"\n]+)"\s*;', lease, re.M)
+        if name and name.group(1) == interface:
+            matching.append(lease)
+    if not matching:
+        raise RuntimeError(f"DHCP did not record a lease for {interface}")
+    routers = re.search(r"^\s*option\s+routers\s+([^;]+);", matching[-1], re.M)
+    if not routers:
+        raise RuntimeError(f"Newest DHCP lease for {interface} has no router")
+    try:
+        router = ipaddress.IPv4Address(routers.group(1).split(",")[0].strip())
+    except ipaddress.AddressValueError as error:
+        raise RuntimeError(f"DHCP router for {interface} is not an IPv4 address") from error
+    if router.is_unspecified or router.is_multicast or router.is_loopback or int(router) == 0xffffffff:
+        raise RuntimeError(f"DHCP router for {interface} is not a usable gateway")
+    return str(router)
+
+def prefer_nat_routes(interface, router, execute=run):
+    # Cowork can install its blackhole default after DHCP. More-specific /1
+    # routes keep normal egress on NAT even in that ordering, while retaining
+    # the connected Cowork link and the narrower Nebula overlay route.
+    for prefix in ("0.0.0.0/1", "128.0.0.0/1"):
+        execute("ip", "-4", "route", "replace", prefix, "via", router, "dev", interface, timeout=3)
+
+def route_snapshot(lighthouse):
+    commands = {"routes": ("show",), "internetRoute": ("get", "1.1.1.1")}
+    host = lighthouse.rsplit(":", 1)[0]
+    try:
+        if ipaddress.ip_address(host).version == 4:
+            commands["lighthouseRoute"] = ("get", host)
+    except ValueError:
+        pass  # Hostname resolution is not required for this local diagnostic.
+    result = {}
+    for name, arguments in commands.items():
+        try:
+            reply = run("ip", "-j", "-4", "route", *arguments, check=False, capture_output=True, timeout=3)
+            if len(reply.stdout) > 16_384:
+                result[name] = {"error": "Route diagnostic exceeds 16 KiB"}
+            else:
+                result[name] = json.loads(reply.stdout) if reply.returncode == 0 else {"error": reply.stderr[-1000:]}
+        except (OSError, ValueError, subprocess.TimeoutExpired) as error:
+            result[name] = {"error": str(error)[-1000:]}
+    return result
+
+def write_ready(identity_key, network_mode, distribution_mode, mesh_ready, fallback_reason):
+    value = {"schema": "ovm.guest-ready/v2", "runtimeReady": True, "meshReady": mesh_ready,
+             "identityKey": identity_key, "networkMode": network_mode, "distributionMode": distribution_mode,
+             "effectiveDistributionMode": "mesh" if mesh_ready else ("isolated" if network_mode == "isolated" else "local"),
+             "fallbackReason": fallback_reason}
+    target = Path("/run/ovm/ready.json")
+    temporary = target.with_suffix(".tmp")
+    temporary.write_text(json.dumps(value) + "\n")
+    os.chmod(temporary, 0o644)
+    temporary.replace(target)
+    return value
+
+
+def initialize_mesh(identity):
+    children = []
+    try:
+        if not Path("/sys/class/net/ovm0").exists():
+            with open("/run/ovm/nebula.log", "a") as log:
+                node = subprocess.Popen(["nebula", "-config", "/run/ovm-config/config.yaml"], stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True)
+                children.append(node)
+            deadline = time.monotonic() + 10
+            while not Path("/sys/class/net/ovm0").exists():
+                if node.poll() is not None or time.monotonic() > deadline:
+                    raise RuntimeError("Guest mesh failed to start: " + Path("/run/ovm/nebula.log").read_text()[-1000:])
+                time.sleep(0.1)
+        run("o-node", "start", "--fresh-pki-key-algorithm", "ec-p256", timeout=45)
+        deadline = time.monotonic() + 5
+        while True:
+            addresses = json.loads(run("ip", "-j", "address", "show", "dev", "ovm0", capture_output=True).stdout)
+            if any(entry.get("local") == identity["address"] for link in addresses for entry in link.get("addr_info", [])):
+                break
+            if time.monotonic() > deadline:
+                raise RuntimeError("Guest mesh did not assign its certified address")
+            time.sleep(0.1)
+        if not peer_ready(identity["address"]):
+            with open("/run/ovm/peer.log", "a") as log:
+                peer = subprocess.Popen(["/usr/local/sbin/ovm-peer-service"], stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True)
+                children.append(peer)
+            deadline = time.monotonic() + 5
+            while not peer_ready(identity["address"]):
+                if peer.poll() is not None or time.monotonic() > deadline:
+                    raise RuntimeError("Peer service failed: " + Path("/run/ovm/peer.log").read_text()[-1000:])
+                time.sleep(0.1)
+    except Exception:
+        for child in reversed(children):
+            if child.poll() is None:
+                child.terminate()
+                try:
+                    child.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    child.kill()
+                    child.wait(timeout=2)
+        raise
+
+
+def optional_mesh(mode, configured, identity, fallback_reason=None, initialize=initialize_mesh):
+    if mode not in ("auto", "local", "required"):
+        raise RuntimeError("Invalid OVM distribution mode")
+    if mode == "local":
+        return False, fallback_reason
+    if not configured:
+        reason = fallback_reason or "Mesh configuration is unavailable; local runtime and NAT remain ready"
+        if mode == "required":
+            raise RuntimeError(reason)
+        return False, reason
+    try:
+        initialize(identity)
+        return True, None
+    except Exception as error:
+        if mode == "required":
+            raise
+        return False, ("Guest mesh initialization failed: " + str(error))[-1500:]
+
+
+def main():
+    mount("proc", "proc", "/proc")
+    mount("sysfs", "sysfs", "/sys")
+    mount("devpts", "devpts", "/dev/pts")
+    if not Path("/dev/fd").exists():
+        Path("/dev/fd").symlink_to("/proc/self/fd")
+    os.environ.update(O_LANG_ROOT="/opt/ostadix", O_BACKENDS_DIR="/opt/ostadix/backends")
+    os.environ["PATH"] = "/usr/local/bin:/opt/ostadix-toolchain/bin:" + os.environ.get("PATH", "/usr/bin:/bin")
+    cmdline = Path("/proc/cmdline").read_text().split()
+    if "ovm.provision=1" in cmdline:
+        return
+    profile = json.loads(Path("/var/lib/ovm/guest/install.json").read_text())
+    if profile.get("verified") is not True:
+        raise RuntimeError("Prepared guest runtime installation is not verified")
+    for tool in ("O", "o", "olangc", "o-node", "octl", "ostadix-mcp"):
+        if not os.access("/usr/local/bin/" + tool, os.X_OK):
+            raise RuntimeError("Prepared guest runtime tool is missing: " + tool)
+    network_mode = "isolated" if "ovm.network=isolated" in cmdline else "nat"
+    mode = next((v.split("=", 1)[1] for v in cmdline if v.startswith("ovm.distribution=")), "auto")
+    if mode not in ("auto", "local", "required"):
+        raise RuntimeError("Invalid OVM distribution mode")
+    if network_mode == "isolated":
+        return  # Native isolated readiness validates the prepared runtime profile.
+    if run("mountpoint", "-q", "/run", check=False).returncode:
+        mount("tmpfs", "tmpfs", "/run")
+    Path("/run/ovm").mkdir(parents=True, exist_ok=True)
+    lock = open("/run/ovm/start.lock", "w")
+    fcntl.flock(lock, fcntl.LOCK_EX)
+    mount("virtiofs", "ovmconfig", "/run/ovm-config")
+    identity = json.loads(Path("/run/ovm-config/identity.json").read_text())
+    launch_file = Path("/run/ovm-config/launch.json")
+    launch = json.loads(launch_file.read_text()) if launch_file.exists() else {"meshConfigured": bool(identity.get("address"))}
+    identity_key = hashlib.sha256((identity["networkId"] + ":" + identity["controllerId"] + ":" + identity["guestId"]).encode()).hexdigest()[:24]
+    marker = Path("/run/ovm/ready")
+    try:
+        ready = json.loads(Path("/run/ovm/ready.json").read_text())
+        if marker.read_text() == identity_key and ready.get("identityKey") == identity_key and ready.get("runtimeReady") is True and ready.get("distributionMode") == mode:
+            if ready.get("meshReady") is True:
+                if Path("/sys/class/net/ovm0").exists() and peer_ready(identity["address"]):
+                    return
+            elif mode != "required":
+                return
+    except (OSError, ValueError):
+        pass
+    # Local runtime identity is independent of Nebula and remains available on fallback.
+    state = Path("/var/lib/ovm/guests") / identity_key
+    state.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.environ.update(XDG_CONFIG_HOME=str(state / "config"), XDG_STATE_HOME=str(state / "state"), HOSTNAME="ovm-" + identity_key[:12])
+    run("hostname", os.environ["HOSTNAME"])
+    Path("/run/ovm/environment.json").write_text(json.dumps({key: os.environ[key] for key in ("O_LANG_ROOT", "O_BACKENDS_DIR", "XDG_CONFIG_HOME", "XDG_STATE_HOME", "HOSTNAME")}))
+    interfaces = sorted((p for p in Path("/sys/class/net").iterdir() if (p / "device").exists()), key=lambda p: str((p / "device").resolve()))
+    index = int(next((v.split("=", 1)[1] for v in cmdline if v.startswith("ovm.network_index=")), "0"))
+    if index < 0 or index >= len(interfaces):
+        raise RuntimeError(f"OVM network interface {index} is missing")
+    interface = interfaces[index].name
+    run("ip", "link", "set", "lo", "up")
+    run("ip", "link", "set", interface, "up")
+    # These paths are permitted by the installed dhclient AppArmor policy.
+    DHCLIENT_CONFIG.write_text("timeout 20;\nretry 1;\nselect-timeout 0;\n")
+    DHCLIENT_LEASES.write_text("")
+    run("dhclient", "-4", "-1", "-cf", str(DHCLIENT_CONFIG), "-lf", str(DHCLIENT_LEASES),
+        "-pf", str(DHCLIENT_PID), interface, timeout=25)
+    lighthouse = ""
+    if launch.get("meshConfigured") and mode != "local":
+        try:
+            network_config = json.loads(Path("/run/ovm-config/config.yaml").read_text())
+            lighthouse = next(iter(network_config["static_host_map"].values()))[0]
+        except (OSError, ValueError, KeyError, StopIteration):
+            pass  # The optional mesh initializer reports a missing/invalid config.
+    routing = {"schema": "ovm-guest-routing-v1", "interface": interface, "interfaceIndex": index,
+               "lighthouseEndpoint": lighthouse, "before": route_snapshot(lighthouse)}
+    try:
+        if index > 0 and len(interfaces) > 1:
+            routing["dhcpRouter"] = dhcp_router(DHCLIENT_LEASES.read_text(), interface)
+            prefer_nat_routes(interface, routing["dhcpRouter"])
+    finally:
+        routing["after"] = route_snapshot(lighthouse)
+        Path("/run/ovm/network.json").write_text(json.dumps(routing, indent=2) + "\n")
+        os.chmod("/run/ovm/network.json", 0o644)
+    route = routing["after"]["internetRoute"]
+    if not isinstance(route, list) or not route or route[0].get("dev") != interface:
+        raise RuntimeError("Guest default traffic is not routed through its NAT interface; see /run/ovm/network.json")
+    try:
+        mesh_ready, reason = optional_mesh(mode, launch.get("meshConfigured") is True, identity, launch.get("fallbackReason"))
+    except Exception as error:
+        write_ready(identity_key, network_mode, mode, False, str(error)[-1500:])
+        raise
+    write_ready(identity_key, network_mode, mode, mesh_ready, reason)
+    marker.write_text(identity_key)
+    os.chmod(marker, 0o644)
+    print(f"[ovm] runtime ready; distribution={mode} meshReady={str(mesh_ready).lower()} node={os.environ['HOSTNAME']}", file=sys.stderr)
+    if reason:
+        print(f"[ovm] {reason}", file=sys.stderr)
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as error:
+        print(f"[ovm] guest startup failed: {error}", file=sys.stderr)
+        sys.exit(1)

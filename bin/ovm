@@ -1,0 +1,667 @@
+#!/usr/bin/env node
+
+/**
+ * o-gents compatibility entry point.
+ * Existing ovm routes and internal protocols remain available behind gent.
+ */
+
+import { spawn } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { everydayHelp, runUserCommand } from "../src/user-cli.mjs";
+import { prepareLaunchNetwork, runNetworkCli } from "../src/guest-network.mjs";
+import { applyDistributionEnvironment, validateDistributionMode } from "../src/distribution-config.mjs";
+import { runDistributionCommand } from "../src/distribution-cli.mjs";
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+const projectRoot = path.resolve(here, "..");
+applyDistributionEnvironment(projectRoot);
+const mcpBinary = path.join(projectRoot, "bin", "claude-vm-mcp");
+const pocketBinary = path.join(projectRoot, "bin", "ovm-pocket");
+const nativeBinary = path.join(projectRoot, "bin", "ovm-native");
+const prebuiltDir = path.join(projectRoot, "prebuilt", "macos-arm64");
+
+function localBinary(name) {
+  const built = path.join(projectRoot, "host", name);
+  return fs.existsSync(built) ? built : path.join(prebuiltDir, name);
+}
+
+const vzBinary = localBinary("ClaudeVZRunner");
+const shellBinary = localBinary("OVMShell");
+const swarmBinary = localBinary("OVMSwarm");
+const bundleDir = path.join(projectRoot, "vm", "claudevm.bundle");
+const smolImg = path.join(projectRoot, "host", "smol-bin.arm64.img");
+const shareDir = path.join(projectRoot, "share");
+const leaseFile = path.join(projectRoot, "vm", "claudevm.bundle.mcp.lease");
+const oLangRoot = process.env.O_LANG_ROOT || path.join(os.homedir(), "OSTADIX");
+const backendsDir = process.env.O_BACKENDS_DIR || path.join(oLangRoot, "backends");
+const oBin = process.env.OVM_O_BIN || "O";
+const octlBin = process.env.OVM_OCTL_BIN || "octl";
+const oEnvironment = {
+  ...process.env,
+  CLAUDE_VM_ROOT: projectRoot,
+  O_LANG_ROOT: oLangRoot,
+  O_BACKENDS_DIR: backendsDir,
+};
+
+const args = process.argv.slice(2);
+const command = args[0] || "help";
+
+function networkOptions(passArgs = []) {
+  const index = passArgs.indexOf("--network");
+  const mode = passArgs.includes("--isolated") ? "isolated" : (index >= 0 ? passArgs[index + 1] : process.env.OVM_NETWORK_MODE ?? "nat");
+  if (!["nat", "isolated"].includes(mode)) throw new Error("Network mode must be nat or isolated.");
+  const remaining = passArgs.filter((value, position) => value !== "--isolated" && position !== index && position !== index + 1);
+  // When --network is absent, index + 1 is zero; preserve the first argument.
+  return { mode, remaining: index < 0 ? passArgs.filter((value) => value !== "--isolated") : remaining };
+}
+
+async function vmNetworkArguments(passArgs, guestId) {
+  const { mode, remaining } = networkOptions(passArgs);
+  const distributionIndex = remaining.indexOf("--distribution");
+  const distributionMode = validateDistributionMode(remaining.includes("--local") ? "local" : distributionIndex >= 0 ? remaining[distributionIndex + 1] : process.env.OVM_DISTRIBUTION_MODE);
+  const forwarded = remaining.filter((arg, index) => arg !== "--local" && (distributionIndex < 0 || (index !== distributionIndex && index !== distributionIndex + 1)));
+  const prepared = await prepareLaunchNetwork({ projectRoot, guestId, distributionMode, networkMode: mode });
+  if (prepared.fallbackReason) process.stderr.write(`o-gents: local network fallback — ${prepared.fallbackReason}\n`);
+  return ["--network", mode, "--distribution", distributionMode, ...(prepared.shareDir ? ["--network-share", prepared.shareDir] : []), ...forwarded];
+}
+
+const c = {
+  reset: "\x1b[0m",
+  bold: "\x1b[1m",
+  dim: "\x1b[2m",
+  red: "\x1b[31m",
+  green: "\x1b[32m",
+  yellow: "\x1b[33m",
+  blue: "\x1b[34m",
+  magenta: "\x1b[35m",
+  cyan: "\x1b[36m",
+  gray: "\x1b[90m",
+};
+
+function banner() {
+  console.log(`
+${c.cyan}${c.bold}  ╭────────────────────────────────────────────────────────╮
+  │       ${c.magenta}o-gents${c.cyan} · autonomous gents with persistent VMs      │
+  │       Apple Virtualization / QEMU · Connected Linux    │
+  ╰────────────────────────────────────────────────────────╯${c.reset}
+`);
+}
+
+function showHelp() {
+  console.log(everydayHelp());
+  if (!args.includes("--all")) return;
+  banner();
+  console.log(`${c.bold}USAGE:${c.reset}
+  gent <subcommand> [arguments...] [options]
+
+${c.bold}COMMANDS:${c.reset}
+  ${c.green}shell, term, terminal${c.reset}            ${c.bold}Launch an interactive Linux terminal (Bash)${c.reset}
+    ${c.green}oracle, compile, fuzz${c.reset}            Autonomous AI Compiler & MicroVM Fuzzing Oracle (ASan/UBSan + Dual-ISA)
+    ${c.green}stress, ai-stress, hardware, limit${c.reset}          Full distributed AI hardware-limit stress (M1 Max Metal GPU + 23GB 12-core Xeon)
+    ${c.green}cluster, cross, dist${c.reset}       Dispatch heterogeneous dual-ISA workloads across physical cluster (o-node mTLS)
+  ${c.green}mega, hyper${c.reset}              Launch the hyper mesh orchestrator (Ostadix-lang)
+  ${c.green}node, onode, o-node${c.reset} [subcmd...]               Ostadix o-node TLS 1.3 mTLS distributed execution fabric (list, doctor, profile, run)
+  ${c.green}swarm, pocket, agents${c.reset}      Run communicating gents, each with a private VM
+  ${c.green}fleet${c.reset}                      Run raw parallel microVM shell tasks
+  ${c.green}network${c.reset}                    Create, inspect, or join your VM peer network
+  ${c.green}guests${c.reset}                     Set up or check built-in Ostadix VM environments
+  ${c.green}native${c.reset}                     Probe or call qualified decoded Claude native capabilities
+  ${c.green}spread, mesh${c.reset}               Launch recursive self-spreading microVM lineage mesh (Ostadix-lang)
+  ${c.green}ai, adaptive${c.reset}               Launch closed-loop AI-directed distributed swarm (Neural + Multi-Host)
+  ${c.green}status, info${c.reset}                     Inspect host resources, VM lifecycle, and lease state
+  ${c.green}run, exec${c.reset} <prog> [args...]       Execute an allowlisted command inside guest Linux
+  ${c.green}start${c.reset}                      Boot the microVM into active resident state
+  ${c.green}stop${c.reset}                       Shut down the microVM and release the lease
+  ${c.green}console, logs${c.reset} [hvc0|hvc1]        Read kernel boot logs (hvc1) or daemon logs (hvc0)
+  ${c.green}probe${c.reset}                      Verify bundle, kernel, and hypervisor without booting
+  ${c.green}mcp${c.reset}                        Launch the stdio MCP server (for AI agents)
+  ${c.green}raw${c.reset} [args...]              Execute raw Swift Virtualization runner directly
+
+${c.bold}OPTIONS:${c.reset}
+  ${c.yellow}--json${c.reset}                     Output raw JSON instead of formatted text
+  ${c.yellow}--help, -h${c.reset}                 Display this help card
+
+${c.bold}EXAMPLES:${c.reset}
+  ${c.gray}# Enter interactive Linux terminal${c.reset}
+  gent shell
+
+  ${c.gray}# Quick status check${c.reset}
+  gent status
+
+  ${c.gray}# Execute commands directly${c.reset}
+  gent run uname -a
+  gent run python3 --version
+
+  ${c.gray}# Run three communicating agent pockets${c.reset}
+  gent swarm --mission "build and independently verify a parser" --agents 3
+
+  ${c.gray}# Inspect decoded native capabilities${c.reset}
+  gent native probe
+
+  ${c.gray}# Inspect kernel boot console${c.reset}
+  gent console hvc1
+`);
+}
+
+async function createClient() {
+  const [{ Client }, { StdioClientTransport }] = await Promise.all([
+    import("@modelcontextprotocol/sdk/client/index.js"),
+    import("@modelcontextprotocol/sdk/client/stdio.js"),
+  ]);
+  const transport = new StdioClientTransport({
+    command: mcpBinary,
+    args: [],
+    env: { ...process.env },
+  });
+  const client = new Client({ name: "ovm-cli", version: "1.0.0" });
+  await client.connect(transport, { timeout: 180_000 });
+  return client;
+}
+
+function decodeTool(reply, toolName) {
+  const block = reply.content?.find((item) => item.type === "text");
+  const body = block ? JSON.parse(block.text) : {};
+  if (reply.isError) {
+    const msg = body.error || "Unknown MCP execution error";
+    const err = new Error(`${toolName}: ${msg}`);
+    err.evidence = body.evidence || body;
+    throw err;
+  }
+  return body;
+}
+
+function handleOracle(passArgs) {
+  const scriptPath = path.join(projectRoot, "examples", "autonomous_compiler_oracle.O");
+
+  const child = spawn(oBin, [scriptPath, backendsDir, ...passArgs], {
+    stdio: "inherit",
+    env: oEnvironment,
+  });
+
+  child.on("close", (code) => {
+    process.exit(code || 0);
+  });
+}
+
+function handleStress(passArgs) {
+  const scriptPath = path.join(projectRoot, "examples", "ai_hardware_limit.O");
+
+  const child = spawn(oBin, [scriptPath, backendsDir, ...passArgs], {
+    stdio: "inherit",
+    env: oEnvironment,
+  });
+
+  child.on("close", (code) => {
+    process.exit(code || 0);
+  });
+}
+
+function handleMega(passArgs) {
+  const scriptPath = path.join(projectRoot, "examples", "hyper_mesh_orchestrator.O");
+
+  const child = spawn(oBin, [scriptPath, backendsDir, ...passArgs], {
+    stdio: "inherit",
+    env: oEnvironment,
+  });
+
+  child.on("close", (code) => {
+    process.exit(code || 0);
+  });
+}
+
+function handleCluster(passArgs) {
+  const scriptPath = path.join(projectRoot, "examples", "distributed_cross_machine.O");
+
+  const child = spawn(oBin, [scriptPath, backendsDir, ...passArgs], {
+    stdio: "inherit",
+    env: oEnvironment,
+  });
+
+  child.on("close", (code) => {
+    process.exit(code || 0);
+  });
+}
+
+function handleNode(nodeArgs) {
+  const child = spawn(octlBin, ["node", ...nodeArgs], {
+    stdio: "inherit",
+    env: oEnvironment,
+  });
+
+  child.on("close", (code) => {
+    process.exit(code || 0);
+  });
+}
+
+function handleAdaptive(passArgs) {
+  const scriptPath = path.join(projectRoot, "examples", "ai_adaptive_swarm.O");
+
+  const child = spawn(oBin, [scriptPath, backendsDir, ...passArgs], {
+    stdio: "inherit",
+    env: oEnvironment,
+  });
+
+  child.on("close", (code) => {
+    process.exit(code || 0);
+  });
+}
+
+function handleSpread(passArgs) {
+  const scriptPath = path.join(projectRoot, "examples", "dynamic_spread.O");
+
+  const child = spawn(oBin, [scriptPath, backendsDir, ...passArgs], {
+    stdio: "inherit",
+    env: oEnvironment,
+  });
+
+  child.on("close", (code) => {
+    process.exit(code || 0);
+  });
+}
+
+async function handleSwarm(passArgs) {
+  const { mode, remaining } = networkOptions(passArgs);
+  const child = spawn(swarmBinary, [
+    "--bundle", bundleDir,
+    "--smol", smolImg,
+    "--network", mode,
+    ...remaining,
+  ], {
+    stdio: "inherit",
+    env: process.env,
+  });
+
+  child.on("close", (code) => {
+    process.exit(code || 0);
+  });
+}
+
+function handlePocket(passArgs) {
+  const child = spawn(pocketBinary, passArgs, {
+    stdio: "inherit",
+    env: process.env,
+  });
+  child.on("close", (code) => process.exit(code || 0));
+}
+
+function handleNative(passArgs) {
+  const child = spawn(nativeBinary, passArgs, {
+    stdio: "inherit",
+    env: process.env,
+  });
+  child.on("close", (code) => process.exit(code || 0));
+}
+
+async function handleShell(passArgs = []) {
+  // Check if lease file exists
+  if (fs.existsSync(leaseFile)) {
+    try {
+      const lease = JSON.parse(fs.readFileSync(leaseFile, "utf8"));
+      // Check if process is alive
+      try {
+        process.kill(lease.pid, 0);
+        console.error(`${c.red}Error: MicroVM is currently locked by active PID ${lease.pid}.${c.reset}`);
+        console.error(`Run 'gent stop' or wait for that operation to complete.`);
+        process.exit(1);
+      } catch {
+        // Stale lease, remove it
+        fs.unlinkSync(leaseFile);
+      }
+    } catch {}
+  }
+
+  console.log(`
+${c.cyan}${c.bold}  ╭────────────────────────────────────────────────────────╮
+  │       ${c.magenta}gent shell${c.cyan} · Entering Linux Virtual Machine         │
+  │       Apple Virtualization.framework · Ubuntu ARM64    │
+  ╰────────────────────────────────────────────────────────╯${c.reset}
+  ${c.gray}Type ${c.bold}'exit'${c.reset}${c.gray} or press Ctrl+D to return to macOS.${c.reset}
+`);
+
+  const networkArgs = await vmNetworkArguments(passArgs, `bundle:${bundleDir}`);
+  const child = spawn(shellBinary, [
+    "--bundle", bundleDir,
+    "--smol", smolImg,
+    "--share", shareDir,
+    ...networkArgs,
+  ], {
+    stdio: "inherit",
+    env: process.env,
+  });
+
+  child.on("close", (code) => {
+    console.log(`\n${c.green}✓ Returned to macOS host.${c.reset}`);
+    process.exit(code || 0);
+  });
+}
+
+async function handleStatus(isJson) {
+  const client = await createClient();
+  try {
+    const res = await client.callTool({ name: "status", arguments: {} }, undefined, { timeout: 30_000 });
+    const s = decodeTool(res, "status");
+    if (isJson) {
+      console.log(JSON.stringify(s, null, 2));
+      return;
+    }
+
+    banner();
+    console.log(`${c.bold}HYPERVISOR & LIFECYCLE${c.reset}`);
+    console.log(`  Backend:      ${c.green}${s.lifecycle?.backend || "swift-virtualization"}${c.reset}`);
+    console.log(`  Supported:    ${s.lifecycle?.supported ? c.green + "✓ Yes" : c.red + "✗ No"}${c.reset}`);
+    console.log(`  VM State:     ${s.lifecycle?.running ? c.green + "● RUNNING" : c.yellow + "○ STOPPED"}${c.reset}`);
+    console.log(`  VSOCK:        ${s.lifecycle?.vsockConnected ? c.green + "connected" : c.gray + "disconnected"}${c.reset}`);
+    console.log(`  Guest Ready:  ${s.lifecycle?.guestReady ? c.green + "ready" : c.gray + "not ready"}${c.reset}`);
+    console.log("");
+
+    console.log(`${c.bold}HOST METRICS${c.reset}`);
+    console.log(`  Free RAM:     ${s.host?.freeMemoryPercent}% (min policy: ${s.policy?.minimumFreeMemoryPercent || 35}%)`);
+    console.log(`  Pressure:     Level ${s.host?.memoryPressureLevel}`);
+    console.log(`  Free Disk:    ${((s.host?.freeDiskBytes || 0) / (1024 ** 3)).toFixed(1)} GiB`);
+    console.log("");
+
+    console.log(`${c.bold}CONTROLLER LEASE${c.reset}`);
+    console.log(`  Held:         ${s.controllerLease?.held ? c.yellow + "HELD" : c.green + "FREE"}${c.reset}`);
+    if (s.controllerLease?.held) {
+      console.log(`  PID:          ${s.controllerLease?.pid}`);
+      console.log(`  Acquired At:  ${s.controllerLease?.acquiredAt}`);
+    }
+    console.log("");
+
+    console.log(`${c.bold}ALLOWLISTED GUEST COMMANDS${c.reset}`);
+    const progs = s.policy?.guestPrograms || [];
+    for (const prog of progs) {
+      console.log(`  ${c.cyan}▸${c.reset} ${prog}`);
+    }
+    console.log("");
+  } finally {
+    await client.close();
+  }
+}
+
+async function handleRun(runArgs, isJson) {
+  if (runArgs.length === 0) {
+    console.error(`${c.red}Error: 'gent run' requires a program name.${c.reset}`);
+    console.error(`Try: gent run uname -a`);
+    process.exit(1);
+  }
+
+  const program = runArgs[0];
+  const programArgs = runArgs.slice(1);
+
+  const client = await createClient();
+  try {
+    const res = await client.callTool(
+      {
+        name: "exec_cycle",
+        arguments: {
+          program,
+          args: programArgs,
+          timeoutSeconds: 30,
+        },
+      },
+      undefined,
+      { timeout: 180_000, maxTotalTimeout: 180_000 }
+    );
+    const exec = decodeTool(res, "exec_cycle");
+    if (isJson) {
+      console.log(JSON.stringify(exec, null, 2));
+      return;
+    }
+
+    if (exec.stdout) process.stdout.write(exec.stdout);
+    if (exec.stderr) process.stderr.write(exec.stderr);
+
+    if (exec.exitCode !== 0) {
+      process.exit(exec.exitCode || 1);
+    }
+  } catch (err) {
+    if (isJson) {
+      console.error(JSON.stringify({ error: err.message, evidence: err.evidence }, null, 2));
+    } else {
+      console.error(`${c.red}Execution failed:${c.reset} ${err.message}`);
+      if (err.evidence?.verificationError) {
+        console.error(`${c.yellow}Verification:${c.reset} ${err.evidence.verificationError}`);
+      }
+    }
+    process.exit(1);
+  } finally {
+    await client.close();
+  }
+}
+
+async function handleConsole(stream, isJson) {
+  const selectedStream = stream === "hvc0" ? "hvc0" : "hvc1";
+  const client = await createClient();
+  try {
+    const res = await client.callTool(
+      {
+        name: "console",
+        arguments: { stream: selectedStream, maxBytes: 65536 },
+      },
+      undefined,
+      { timeout: 15_000 }
+    );
+    const body = decodeTool(res, "console");
+    if (isJson) {
+      console.log(JSON.stringify(body, null, 2));
+      return;
+    }
+    if (!body.text || body.text.trim().length === 0) {
+      console.log(`${c.gray}(console ${selectedStream} buffer is empty)${c.reset}`);
+    } else {
+      console.log(body.text);
+    }
+  } finally {
+    await client.close();
+  }
+}
+
+async function handleStart(isJson) {
+  const client = await createClient();
+  try {
+    const res = await client.callTool({ name: "start", arguments: {} }, undefined, { timeout: 180_000, maxTotalTimeout: 180_000 });
+    const body = decodeTool(res, "start");
+    if (isJson) {
+      console.log(JSON.stringify(body, null, 2));
+    } else {
+      console.log(`${c.green}✓ MicroVM started successfully.${c.reset}`);
+    }
+  } finally {
+    await client.close();
+  }
+}
+
+async function handleStop(isJson) {
+  const client = await createClient();
+  try {
+    const res = await client.callTool({ name: "stop", arguments: {} }, undefined, { timeout: 30_000 });
+    const body = decodeTool(res, "stop");
+    if (isJson) {
+      console.log(JSON.stringify(body, null, 2));
+    } else {
+      console.log(`${c.green}✓ MicroVM stopped cleanly. Controller lease released.${c.reset}`);
+    }
+  } finally {
+    await client.close();
+  }
+}
+
+function handleProbe(isJson) {
+  const child = spawn(
+    vzBinary,
+    ["--probe", "--bundle", bundleDir, "--smol", smolImg, "--share", shareDir],
+    { stdio: ["ignore", "pipe", "inherit"] }
+  );
+  let out = "";
+  child.stdout.on("data", (d) => (out += d.toString("utf8")));
+  child.on("close", (code) => {
+    if (isJson) {
+      console.log(out.trim());
+      return;
+    }
+    try {
+      const parsed = JSON.parse(out.trim());
+      banner();
+      console.log(`${c.bold}PRE-FLIGHT PROBE RESULT:${c.reset}`);
+      console.log(`  Supported:           ${parsed.supported ? c.green + "✓ Yes" : c.red + "✗ No"}${c.reset}`);
+      console.log(`  Configuration Valid: ${parsed.configurationValid ? c.green + "✓ Yes" : c.red + "✗ No"}${c.reset}`);
+      console.log(`  CPUs:                ${parsed.cpuCount}`);
+      console.log(`  Memory Allocated:    ${parsed.memorySize / (1024 ** 3)} GiB`);
+      console.log(`  Network Mode:        ${parsed.networkMode}`);
+    } catch {
+      console.log(out);
+    }
+    process.exit(code || 0);
+  });
+}
+
+async function handleRaw(rawArgs) {
+  const inspection = rawArgs.includes("--probe") || rawArgs.includes("--support-only");
+  const bundleIndex = rawArgs.indexOf("--bundle");
+  const selectedBundle = bundleIndex >= 0 ? path.resolve(rawArgs[bundleIndex + 1]) : bundleDir;
+  const spawnArgs = inspection ? rawArgs : await vmNetworkArguments(rawArgs, `bundle:${selectedBundle}`);
+  const child = spawn(vzBinary, spawnArgs, { stdio: "inherit" });
+  child.on("close", (code) => process.exit(code || 0));
+}
+
+function handleMcp() {
+  const child = spawn(mcpBinary, [], { stdio: "inherit", env: process.env });
+  child.on("close", (code) => process.exit(code || 0));
+}
+
+async function main() {
+  if (command === "worker") {
+    const { runControllerStdio } = await import("../src/controller-worker.mjs");
+    await runControllerStdio({ root: projectRoot });
+    return;
+  }
+  const distributionResult = await runDistributionCommand(command, args.slice(1), { projectRoot });
+  if (distributionResult !== null) { process.exitCode = distributionResult; return; }
+  if (command === "agent") {
+    if (args[1] === "resume") {
+      const { runSwarmCli } = await import("../src/swarm-cli.mjs");
+      if (!args[2] || args[2].startsWith("-")) throw new Error('Usage: gent resume ID [--mission "new task"] [--rounds N] [--local]');
+      const resumeArgs = args.slice(3);
+      if (resumeArgs[0] && !resumeArgs[0].startsWith("-")) resumeArgs.splice(0, 1, "--mission", resumeArgs[0]);
+      process.exitCode = await runSwarmCli(["--resume", args[2], ...resumeArgs]);
+    } else {
+      const { runAgentCommand } = await import("../src/agent-capsule.mjs");
+      process.exitCode = await runAgentCommand(args.slice(1), { projectRoot });
+    }
+    return;
+  }
+  const userResult = await runUserCommand(args[0], args.slice(1), { root: projectRoot });
+  if (userResult !== null) { process.exitCode = userResult; return; }
+  const isJson = args.includes("--json");
+  const filteredArgs = args.filter((a) => a !== "--json");
+  const cmd = filteredArgs[0] || "help";
+
+  switch (cmd) {
+    case "guests": {
+      const { runGuestsCli } = await import("../src/guest-manager.mjs");
+      process.exitCode = await runGuestsCli(args.slice(1), { projectRoot });
+      break;
+    }
+    case "network":
+      process.exitCode = await runNetworkCli(args.slice(1), { projectRoot });
+      break;
+    case "oracle":
+    case "compile":
+    case "fuzz":
+      handleOracle(args.slice(1));
+      break;
+    case "stress":
+    case "ai-stress":
+    case "hardware":
+    case "limit":
+      handleStress(args.slice(1));
+      break;
+    case "mega":
+    case "hyper":
+      handleMega(args.slice(1));
+      break;
+    case "cluster":
+    case "cross":
+    case "dist":
+      handleCluster(args.slice(1));
+      break;
+    case "node":
+    case "onode":
+    case "o-node":
+      handleNode(args.slice(1));
+      break;
+    case "ai":
+    case "adaptive":
+      handleAdaptive(args.slice(1));
+      break;
+    case "spread":
+    case "mesh":
+      handleSpread(args.slice(1));
+      break;
+    case "fleet":
+      await handleSwarm(args.slice(1));
+      break;
+    case "swarm":
+    case "pocket":
+    case "agents":
+      handlePocket(args.slice(1));
+      break;
+    case "native":
+      handleNative(args.slice(1));
+      break;
+    case "shell":
+    case "term":
+    case "terminal":
+      await handleShell(args.slice(1));
+      break;
+    case "status":
+    case "info":
+      await handleStatus(isJson);
+      break;
+    case "run":
+    case "exec":
+      await handleRun(filteredArgs.slice(1), isJson);
+      break;
+    case "start":
+      await handleStart(isJson);
+      break;
+    case "stop":
+      await handleStop(isJson);
+      break;
+    case "console":
+    case "logs":
+      await handleConsole(filteredArgs[1], isJson);
+      break;
+    case "probe":
+      handleProbe(isJson);
+      break;
+    case "mcp":
+      handleMcp();
+      break;
+    case "raw":
+      await handleRaw(filteredArgs.slice(1));
+      break;
+    case "help":
+    case "--help":
+    case "-h":
+      showHelp();
+      break;
+    default:
+      console.error(`${c.red}Unknown command: ${cmd}${c.reset}`);
+      showHelp();
+      process.exit(1);
+  }
+}
+
+main().catch((err) => {
+  if (args.includes("--json")) {
+    console.error(JSON.stringify({ error: err.message, evidence: err.evidence ?? null }, null, 2));
+  } else {
+    console.error(`${c.red}Error:${c.reset} ${err.message}`);
+  }
+  process.exit(1);
+});

@@ -1,0 +1,31 @@
+{
+  "memoryGB": 4,
+  "cpuCount": 4,
+  "networkMode": "nat",
+  "startupTimeoutSeconds": 120,
+  "minimumFreeMemoryPercent": 35,
+  "minimumFreeDiskGiB": 20,
+  "defaultTimeoutSeconds": 10,
+  "maximumTimeoutSeconds": 30,
+  "maximumOutputBytes": 32768,
+  "maximumArguments": 8,
+  "maximumArgumentBytes": 1024,
+  "programs": {
+    "uname": {
+      "path": "/usr/bin/uname",
+      "allowedArgv": [[], ["-a"], ["-m"], ["-r"], ["-s"]]
+    },
+    "id": {
+      "path": "/usr/bin/id",
+      "allowedArgv": [[], ["-u"], ["-g"]]
+    },
+    "python3": {
+      "path": "/usr/bin/python3",
+      "allowedArgv": [["--version"]]
+    },
+    "git": {
+      "path": "/usr/bin/git",
+      "allowedArgv": [["--version"]]
+    }
+  }
+}

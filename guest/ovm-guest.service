@@ -1,0 +1,13 @@
+[Unit]
+Description=OVM guest network and Ostadix node
+After=local-fs.target
+Before=multi-user.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/ovm-guest-start
+RemainAfterExit=yes
+TimeoutStartSec=90
+
+[Install]
+WantedBy=multi-user.target

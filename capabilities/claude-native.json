@@ -1,0 +1,185 @@
+{
+  "schema": "ovm.native-capabilities/v1",
+  "providers": {
+    "claude-native": {
+      "description": "Claude Desktop NAPI bindings for keyboard, pointer, application, and preference operations.",
+      "moduleRelativePath": "node_modules/@ant/claude-native",
+      "binaryRelativePath": "node_modules/@ant/claude-native/claude-native-binding.node",
+      "qualifiedSha256": [
+        "e561e9c26c74d9fcb14a6b8759b62b4fe8dc25ac76b1e36779425c818cea6066"
+      ]
+    },
+    "computer-use": {
+      "description": "Claude Desktop ComputerUseSwift bindings for displays, applications, screenshots, and TCC state.",
+      "moduleRelativePath": "node_modules/@ant/claude-swift/build/Release/computer_use.node",
+      "binaryRelativePath": "node_modules/@ant/claude-swift/build/Release/computer_use.node",
+      "qualifiedSha256": [
+        "34c69153bdff49d99f842279f5fe94d18e910ef86e1955af0f7c4331b6c55680"
+      ]
+    }
+  },
+  "operations": [
+    {
+      "name": "host.frontmostApp",
+      "provider": "claude-native",
+      "memberPath": ["getFrontmostAppInfo"],
+      "access": "observe",
+      "minimumArguments": 0,
+      "maximumArguments": 0,
+      "evidence": "runtime-verified"
+    },
+    {
+      "name": "host.mouseLocation",
+      "provider": "claude-native",
+      "memberPath": ["mouseLocation"],
+      "access": "observe",
+      "minimumArguments": 0,
+      "maximumArguments": 0,
+      "evidence": "decoded-registration"
+    },
+    {
+      "name": "host.authAvailable",
+      "provider": "claude-native",
+      "memberPath": ["AuthRequest", "isAvailable"],
+      "access": "observe",
+      "minimumArguments": 0,
+      "maximumArguments": 0,
+      "evidence": "runtime-verified"
+    },
+    {
+      "name": "host.accessibilityPermission",
+      "provider": "computer-use",
+      "memberPath": ["computerUse", "tcc", "checkAccessibility"],
+      "access": "observe",
+      "minimumArguments": 0,
+      "maximumArguments": 0,
+      "evidence": "runtime-verified"
+    },
+    {
+      "name": "host.screenRecordingPermission",
+      "provider": "computer-use",
+      "memberPath": ["computerUse", "tcc", "checkScreenRecording"],
+      "access": "observe",
+      "minimumArguments": 0,
+      "maximumArguments": 0,
+      "evidence": "runtime-verified"
+    },
+    {
+      "name": "host.displays",
+      "provider": "computer-use",
+      "memberPath": ["computerUse", "display", "listAll"],
+      "access": "observe",
+      "minimumArguments": 0,
+      "maximumArguments": 0,
+      "evidence": "runtime-verified"
+    },
+    {
+      "name": "host.runningApps",
+      "provider": "computer-use",
+      "memberPath": ["computerUse", "apps", "listRunning"],
+      "access": "observe",
+      "minimumArguments": 0,
+      "maximumArguments": 0,
+      "evidence": "runtime-verified"
+    },
+    {
+      "name": "host.processRunning",
+      "provider": "claude-native",
+      "memberPath": ["isProcessRunning"],
+      "access": "observe",
+      "minimumArguments": 1,
+      "maximumArguments": 1,
+      "evidence": "decoded-registration"
+    },
+    {
+      "name": "host.appForFile",
+      "provider": "claude-native",
+      "memberPath": ["getAppInfoForFile"],
+      "access": "observe",
+      "minimumArguments": 1,
+      "maximumArguments": 1,
+      "evidence": "decoded-registration"
+    },
+    {
+      "name": "host.typeText",
+      "provider": "claude-native",
+      "memberPath": ["typeText"],
+      "access": "act",
+      "minimumArguments": 1,
+      "maximumArguments": 1,
+      "evidence": "decoded-registration"
+    },
+    {
+      "name": "host.typeTextPaced",
+      "provider": "claude-native",
+      "memberPath": ["typeTextPaced"],
+      "access": "act",
+      "minimumArguments": 1,
+      "maximumArguments": 3,
+      "evidence": "decoded-registration-signature-incomplete"
+    },
+    {
+      "name": "host.moveMouse",
+      "provider": "claude-native",
+      "memberPath": ["moveMouse"],
+      "access": "act",
+      "minimumArguments": 2,
+      "maximumArguments": 3,
+      "evidence": "decoded-argument-conversions"
+    },
+    {
+      "name": "host.mouseButton",
+      "provider": "claude-native",
+      "memberPath": ["mouseButton"],
+      "access": "act",
+      "minimumArguments": 1,
+      "maximumArguments": 4,
+      "evidence": "decoded-registration-signature-incomplete"
+    },
+    {
+      "name": "host.mouseScroll",
+      "provider": "claude-native",
+      "memberPath": ["mouseScroll"],
+      "access": "act",
+      "minimumArguments": 1,
+      "maximumArguments": 4,
+      "evidence": "decoded-registration-signature-incomplete"
+    },
+    {
+      "name": "host.key",
+      "provider": "claude-native",
+      "memberPath": ["key"],
+      "access": "act",
+      "minimumArguments": 1,
+      "maximumArguments": 4,
+      "evidence": "decoded-registration-signature-incomplete"
+    },
+    {
+      "name": "host.keys",
+      "provider": "claude-native",
+      "memberPath": ["keys"],
+      "access": "act",
+      "minimumArguments": 1,
+      "maximumArguments": 4,
+      "evidence": "decoded-registration-signature-incomplete"
+    },
+    {
+      "name": "host.focusWindow",
+      "provider": "claude-native",
+      "memberPath": ["focusWindow"],
+      "access": "act",
+      "minimumArguments": 1,
+      "maximumArguments": 3,
+      "evidence": "decoded-registration-signature-incomplete"
+    },
+    {
+      "name": "host.openApp",
+      "provider": "computer-use",
+      "memberPath": ["computerUse", "apps", "open"],
+      "access": "act",
+      "minimumArguments": 1,
+      "maximumArguments": 2,
+      "evidence": "runtime-export-signature-incomplete"
+    }
+  ]
+}

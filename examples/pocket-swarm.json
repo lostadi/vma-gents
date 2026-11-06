@@ -1,0 +1,22 @@
+{
+  "mission": "Inspect the guest environment, build a small verified artifact, and have another pocket reproduce the result.",
+  "model": "huihui-spark-vm:32k",
+  "rounds": 4,
+  "maximumAgents": 6,
+  "memoryMB": 768,
+  "cpuCount": 1,
+  "agents": [
+    {
+      "id": "scout",
+      "role": "Inspect the host and private guest, then send concrete facts to builder and auditor."
+    },
+    {
+      "id": "builder",
+      "role": "Create the requested artifact in the persistent private guest rootfs and report exact commands."
+    },
+    {
+      "id": "auditor",
+      "role": "Reproduce the builder's result independently and report discrepancies to all peers."
+    }
+  ]
+}

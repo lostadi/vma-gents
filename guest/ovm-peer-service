@@ -1,0 +1,278 @@
+#!/usr/bin/env python3
+"""Offer native reciprocal o-node pairing to authenticated OVM overlay members."""
+import hashlib
+import ipaddress
+import json
+import os
+from pathlib import Path
+import re
+import select
+import socket
+import subprocess
+import sys
+import threading
+import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+OVERLAY = ipaddress.ip_network("10.87.0.0/16")
+SERVICE_PORT = 7341
+PAIR_PORT = 7340
+
+
+def pairing_limits(environment):
+    def seconds(name, default, minimum, maximum):
+        value = environment.get(name, str(default))
+        if not isinstance(value, str) or not value.isascii() or not value.isdecimal() or not minimum <= int(value) <= maximum:
+            raise ValueError(f"{name} must be an integer from {minimum} to {maximum}")
+        return int(value)
+    total = seconds("OVM_PEER_PAIR_TIMEOUT_SECONDS", 90, 5, 600)
+    io = seconds("OVM_PEER_PAIR_IO_SECONDS", min(60, total), 1, 60)
+    if io > total:
+        raise ValueError("OVM_PEER_PAIR_IO_SECONDS must not exceed OVM_PEER_PAIR_TIMEOUT_SECONDS")
+    return {"total": total, "io": io, "offer": min(600, total + 30), "ready": min(30, total)}
+
+
+def native_diagnostic(stderr):
+    # Emit fixed observations and a digest, never a native passcode or key.
+    raw = stderr if isinstance(stderr, bytes) else (stderr or "").encode()
+    lowered = raw.lower()
+    observations = [name for name, needle in (
+        ("authentication-failed", b"pairing authentication failed"),
+        ("incomplete-length-prefix", b"before a complete length prefix"),
+        ("io-would-block", b"resource temporarily unavailable"),
+        ("io-would-block", b"os error 11"),
+        ("deadline-reported", b"timed out"),
+        ("connection-refused", b"connection refused"),
+    ) if needle in lowered]
+    observations = sorted(set(observations))
+    return {"observations": observations, "stderrBytes": len(raw), "stderrSha256": hashlib.sha256(raw).hexdigest()}
+
+
+class OverlayServer(ThreadingHTTPServer):
+    def server_bind(self):
+        # Linux's weak-host routing model can accept another interface's IP.
+        # Pin enrollment to the authenticated overlay device as well as its IP.
+        self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, b"ovm0\0")
+        super().server_bind()
+
+
+def overlay_address(value):
+    address = ipaddress.ip_address(value)
+    if address.version != 4 or address not in OVERLAY:
+        raise ValueError("Peer address must belong to the OVM overlay (10.87.0.0/16)")
+    return str(address)
+
+
+def stop_process(process):
+    if process.poll() is None:
+        process.terminate()
+        try:
+            process.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=2)
+
+
+class NativeDiagnostics:
+    """Drain native stderr without retaining or logging any secret-bearing text."""
+    def __init__(self, stream):
+        self.stream = stream
+        self.digest = hashlib.sha256()
+        self.length = 0
+        self.observations = set()
+        self.thread = threading.Thread(target=self._read, daemon=True)
+        self.thread.start()
+
+    def _read(self):
+        tail = b""
+        try:
+            while True:
+                chunk = os.read(self.stream.fileno(), 4096)
+                if not chunk:
+                    break
+                self.digest.update(chunk)
+                self.length += len(chunk)
+                self.observations.update(native_diagnostic(tail + chunk)["observations"])
+                tail = (tail + chunk)[-256:]
+        finally:
+            self.stream.close()
+
+    def result(self):
+        self.thread.join(timeout=2)
+        return {"observations": sorted(self.observations), "stderrBytes": self.length,
+                "stderrSha256": self.digest.hexdigest(), "stderrComplete": not self.thread.is_alive()}
+
+
+def discard(stream):
+    try:
+        while os.read(stream.fileno(), 4096):
+            pass
+    finally:
+        stream.close()
+
+
+class PairingOffers:
+    def __init__(self, address, environment=None):
+        self.address = overlay_address(address)
+        self.environment = environment if environment is not None else dict(os.environ)
+        self.limits = pairing_limits(self.environment)
+        self.lock = threading.Lock()
+
+    def report(self, event, started, process=None, diagnostic=None):
+        value = {"event": event, "elapsedSeconds": round(time.monotonic() - started, 3),
+                 "ioTimeoutSeconds": self.limits["io"], "offerTimeoutSeconds": self.limits["offer"]}
+        if process is not None:
+            value["exitCode"] = process.returncode
+        if diagnostic is not None:
+            value.update(diagnostic.result())
+        print("[ovm-peer-pairing] " + json.dumps(value, sort_keys=True), file=sys.stderr, flush=True)
+
+    def offer(self):
+        if not self.lock.acquire(blocking=False):
+            raise BlockingIOError("Another one-use pairing offer is active; retry shortly")
+        process = diagnostic = None
+        started = time.monotonic()
+        try:
+            process = subprocess.Popen([
+                "o-node", "pair", "--bind", f"{self.address}:{PAIR_PORT}",
+                "--offer-timeout-seconds", str(self.limits["offer"]),
+                "--io-timeout-seconds", str(self.limits["io"]),
+            ], stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=self.environment)
+            diagnostic = NativeDiagnostics(process.stderr)
+            deadline = started + self.limits["ready"]
+            captured = b""
+            while time.monotonic() < deadline:
+                ready, _, _ = select.select([process.stdout], [], [], max(0, deadline - time.monotonic()))
+                if not ready:
+                    break
+                chunk = os.read(process.stdout.fileno(), 4096)
+                if not chunk:
+                    break
+                captured += chunk
+                if len(captured) > 16384:
+                    break
+                node = re.search(rb"^Pairing node: ([A-Za-z0-9_.-]+)\r?$", captured, re.MULTILINE)
+                passcode = re.search(rb"^Passcode: ([^\r\n]+)\r?$", captured, re.MULTILINE)
+                if node and passcode:
+                    response = {"nodeId": node.group(1).decode(), "passcode": passcode.group(1).decode(), "port": PAIR_PORT, "expiresInSeconds": self.limits["offer"]}
+                    self.report("offer-ready", started)
+                    threading.Thread(target=self._reap, args=(process, diagnostic, started), daemon=True).start()
+                    return response
+            raise RuntimeError("Native o-node did not produce a pairing offer before the readiness deadline")
+        except Exception:
+            if process is not None:
+                stop_process(process)
+                process.stdout.close()
+            self.report("offer-start-failed", started, process, diagnostic)
+            self.lock.release()
+            raise
+
+    def _reap(self, process, diagnostic, started):
+        reader = threading.Thread(target=discard, args=(process.stdout,), daemon=True)
+        reader.start()
+        event = "offer-completed"
+        try:
+            # A join may start at the end of the advertised one-use offer.
+            deadline = started + self.limits["offer"] + self.limits["total"]
+            process.wait(timeout=max(0.01, deadline - time.monotonic()))
+            if process.returncode:
+                event = "offer-native-failed"
+        except subprocess.TimeoutExpired:
+            event = "offer-outer-deadline"
+            stop_process(process)
+        finally:
+            reader.join(timeout=2)
+            self.report(event, started, process, diagnostic)
+            self.lock.release()
+
+
+def handler_for(identity, offers, environment):
+    class Handler(BaseHTTPRequestHandler):
+        server_version = "OVMPeer/1"
+
+        def setup(self):
+            self.request.settimeout(15)
+            super().setup()
+
+        def log_message(self, *_args):
+            # Never log a passcode, request body, or successful pairing response.
+            pass
+
+        def reply(self, status, value):
+            payload = json.dumps(value).encode()
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def admitted(self):
+            try:
+                overlay_address(self.client_address[0])
+                return True
+            except ValueError:
+                self.reply(403, {"error": "Only authenticated overlay peers may enroll"})
+                return False
+
+        def do_GET(self):
+            if not self.admitted():
+                return
+            if self.path != "/status":
+                self.reply(404, {"error": "Unknown endpoint"})
+                return
+            node_path = Path(environment["XDG_CONFIG_HOME"]) / "ostadix/lan-open/node-id"
+            try:
+                node_id = node_path.read_text().strip()
+            except OSError:
+                self.reply(503, {"error": "Native node identity is not ready"})
+                return
+            self.reply(200, {"networkId": identity["networkId"], "guestId": identity["guestId"], "address": identity["address"], "nodeId": node_id})
+
+        def do_POST(self):
+            if not self.admitted():
+                return
+            if self.path != "/pair":
+                self.reply(404, {"error": "Unknown endpoint"})
+                return
+            try:
+                size = int(self.headers.get("Content-Length", "0"))
+                if not 0 < size <= 1024:
+                    raise ValueError("Invalid request size")
+                request = json.loads(self.rfile.read(size))
+                if request != {"networkId": identity["networkId"]}:
+                    self.reply(403, {"error": "Network identity mismatch"})
+                    return
+                response = offers.offer()
+                response["networkId"] = identity["networkId"]
+                self.reply(200, response)
+            except BlockingIOError as error:
+                self.reply(409, {"error": str(error)})
+            except (ValueError, json.JSONDecodeError):
+                self.reply(400, {"error": "Malformed pairing request"})
+            except Exception:
+                self.reply(503, {"error": "Native pairing offer could not start"})
+
+    return Handler
+
+
+def main():
+    identity = json.loads(Path("/run/ovm-config/identity.json").read_text())
+    environment = dict(os.environ)
+    environment.update(json.loads(Path("/run/ovm/environment.json").read_text()))
+    environment["PATH"] = "/usr/local/bin:/opt/ostadix-toolchain/bin:" + environment.get("PATH", "/usr/bin:/bin")
+    address = overlay_address(identity["address"])
+    offers = PairingOffers(address, environment)
+    server = OverlayServer((address, SERVICE_PORT), handler_for(identity, offers, environment))
+    server.daemon_threads = True
+    server.timeout = 10
+    print(f"[ovm] native peer enrollment ready at {address}:{SERVICE_PORT}", flush=True)
+    server.serve_forever()
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as error:
+        print(f"ovm-peer-service: {error}", file=sys.stderr)
+        sys.exit(1)

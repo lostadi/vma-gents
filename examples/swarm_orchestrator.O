@@ -1,0 +1,23 @@
+python^(
+import subprocess, json, sys
+
+workers = "4"
+if len(sys.argv) > 1 and sys.argv[1].isdigit():
+    workers = sys.argv[1]
+
+cmd = ["ovm", "fleet", "--workers", workers, "--json"]
+data = json.loads(subprocess.check_output(cmd).decode())
+
+print(f"\n╭────────────────────────────────────────────────────────────────────────╮")
+print(f"│      Ostadix-lang Polyglot MicroVM Fleet Orchestrator (.O)            │")
+print(f"╰────────────────────────────────────────────────────────────────────────╯")
+print(f"  Fleet Size:      {data['fleetSize']} hardware-isolated microVMs")
+print(f"  Global Walltime: {data['globalElapsedMs']:.1f} ms total elapsed\n")
+
+for w in data["workers"]:
+    print(f"  ▸ Worker #{w['id']} [{w['agent']}]: CoW clone {w['cloneMs']:.2f}ms | Boot {w['bootMs']:.1f}ms | Exec {w['execMs']:.1f}ms")
+    out_lines = [line.strip() for line in w["output"].splitlines() if line.strip()]
+    for line in out_lines:
+        print(f"    │ {line}")
+    print()
+)_python

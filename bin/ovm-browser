@@ -1,0 +1,7 @@
+#!/usr/bin/env node
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { runBrowserCLI } from '../src/research-browser.mjs';
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+process.exitCode = await runBrowserCLI(process.argv.slice(2), { root });

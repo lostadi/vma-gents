@@ -1,0 +1,82 @@
+#!/usr/bin/env O
+# Optional Ostadix entrypoint for a communicating VMAgents swarm.
+
+python^(
+from pathlib import Path
+import json
+import os
+import shutil
+import subprocess
+
+home = Path.home()
+default_project = home / "o-gents" if (home / "o-gents").is_dir() else home / "vma-gents" if (home / "vma-gents").is_dir() else home / "claude-vm-mcp"
+project = Path(os.environ.get("CLAUDE_VM_ROOT", default_project)).expanduser().resolve()
+node_value = os.environ.get("CLAUDE_VM_NODE") or shutil.which("node")
+if not node_value:
+    raise RuntimeError("Node 26 or newer is unavailable on PATH")
+node = Path(node_value)
+pocket = project / "bin" / "ovm-pocket"
+if not pocket.is_file():
+    raise RuntimeError(f"OVM pocket entrypoint is unavailable: {pocket}")
+
+mission = os.environ.get(
+    "OVM_SWARM_MISSION",
+    "Inspect the private guest, communicate exact evidence, and finish only after peer verification.",
+)
+model = os.environ.get("OVM_SWARM_MODEL", "huihui-spark-vm:32k")
+agents = os.environ.get("OVM_SWARM_AGENTS", "3")
+rounds = os.environ.get("OVM_SWARM_ROUNDS", "4")
+memory_mb = os.environ.get("OVM_SWARM_MEMORY_MB", "768")
+cpu_count = os.environ.get("OVM_SWARM_CPU_COUNT", "1")
+
+command = [
+    str(node), str(pocket),
+    "--mission", mission,
+    "--model", model,
+    "--agents", agents,
+    "--rounds", rounds,
+    "--memory-mb", memory_mb,
+    "--cpu-count", cpu_count,
+    "--json",
+]
+if os.environ.get("OVM_SWARM_DRY_RUN") == "1":
+    command.append("--dry-run")
+if os.environ.get("OVM_NATIVE_ALLOW_ACT") == "1":
+    command.append("--allow-native-act")
+
+timeout_seconds = int(os.environ.get("OVM_SWARM_TIMEOUT_SECONDS", "900"))
+proc = subprocess.run(
+    command,
+    cwd=project,
+    capture_output=True,
+    text=True,
+    timeout=max(30, min(3600, timeout_seconds)),
+)
+try:
+    receipt = json.loads((proc.stdout or "").strip())
+except json.JSONDecodeError as error:
+    receipt = {
+        "decode_error": str(error),
+        "stdout_tail": (proc.stdout or "")[-4096:],
+    }
+
+__oval_result__ = {
+    "ok": proc.returncode == 0,
+    "control_plane": "Ostadix-lang .O",
+    "protocol": receipt.get("protocol"),
+    "swarm_id": receipt.get("swarmId"),
+    "mission": mission,
+    "model": model,
+    "dry_run": os.environ.get("OVM_SWARM_DRY_RUN") == "1",
+    "completed": receipt.get("completed"),
+    "rounds": receipt.get("rounds", rounds),
+    "agents": receipt.get("agents", []),
+    "messages": receipt.get("messages", []),
+    "state_path": receipt.get("statePath") or receipt.get("stateDirectory"),
+    "node_exit": proc.returncode,
+    "stderr_tail": (proc.stderr or "")[-2048:],
+}
+
+if proc.returncode != 0:
+    raise RuntimeError(json.dumps(__oval_result__, sort_keys=True))
+)_python

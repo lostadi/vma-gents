@@ -1,0 +1,277 @@
+\documentclass[10pt]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage[margin=0.72in]{geometry}
+\usepackage{amsmath}
+\usepackage{array}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{tabularx}
+
+\hypersetup{hidelinks}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0.45em}
+\setlist{nosep,leftmargin=1.4em}
+\renewcommand{\arraystretch}{1.13}
+
+\definecolor{implemented}{HTML}{26734D}
+\definecolor{target}{HTML}{1D4ED8}
+\definecolor{unproven}{HTML}{9A3412}
+\newcommand{\Implemented}{\textcolor{implemented}{\textbf{IMPLEMENTED}}}
+\newcommand{\Target}{\textcolor{target}{\textbf{TARGET}}}
+\newcommand{\Unproven}{\textcolor{unproven}{\textbf{UNPROVEN}}}
+\newcommand{\code}[1]{\texttt{#1}}
+
+\title{Claude VM Performance and Non-Interference Contract}
+\author{Lee Daghlar Ostadi}
+\date{Contract version 0.1 --- 2026-09-01}
+
+\begin{document}
+\maketitle
+\vspace{-1.8em}
+
+\section{Purpose and status vocabulary}
+
+This document defines the performance-only contract for keeping one Claude Linux
+VM warm for the lifetime of its OpenCode controller.  It changes neither the
+Qwen model nor any access capability.  It does not authorize a new device,
+filesystem, network, USB, signing, execution, or policy surface.
+
+The following labels are normative:
+
+\begin{center}
+\begin{tabularx}{\linewidth}{@{}>{\bfseries}l X@{}}
+\toprule
+\Implemented & Present in the inspected implementation or supported by a recorded receipt. \\
+\Target & Required behavior that must pass the acceptance gates in Section~\ref{sec:gates}. \\
+\Unproven & A claim for which the current evidence is insufficient.  It must not be reported as implemented. \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+The contract distinguishes configuration equality from performance equality.
+Byte-for-byte configuration stability is mandatory.  Performance is accepted
+only through repeated measurements under the same host conditions.
+
+\section{Entities, clocks, and baseline}
+
+Let \(C\) be the OpenCode-launched \code{claude\_vm} MCP controller process,
+\(V\) its single \code{ClaudeVZRunner} child and Apple
+\code{VZVirtualMachine}, and \(Q\) the q3.8 Qwen model selected when OpenCode
+starts.  Let \(L_C=[t_C^{start},t_C^{exit}]\) be the controller lifetime.
+Model turns, final responses, compaction, and Ollama load or unload events are
+not controller-exit events.
+
+Guest-ready latency is
+\[
+  T_{ready}=t(\code{guest\_ready})-t(\code{starting}).
+\]
+The recorded current reference is
+\[
+  B_{ready}=5.075\ \mathrm{s}.
+\]
+This value is an \Implemented{} baseline reference, not permission to replace
+raw timestamps.  Every qualification run must retain the corresponding
+\code{starting}, \code{vz\_started}, and \code{guest\_ready} timestamps.
+Reproducibility of the reference under the final persistent design remains
+\Unproven{} until the gates in Section~\ref{sec:gates} pass.
+
+The current compound execution path starts and stops the VM around an operation.
+Its guest-ready and cleanup receipts are \Implemented.  Session-long residency
+and coexistence with unchanged Qwen are \Target{} behavior.
+
+The process-lifetime harness reached \code{guest\_ready} in 3.551~s, retained
+one runner and lease across 20 operations, and recorded a 0.274~s median,
+0.373~s p95, and 0.520~s maximum operation latency.  Controller close removed
+the runner, disk handles, and lease in 0.744~s.  This is \Implemented{}
+harness-level evidence for single initialization, warm residency, and
+controller cleanup.  Actual OpenCode-window closure remains a separate gate.
+
+A separate unchanged-Qwen coexistence probe failed the non-interference gate.
+The no-VM control used a 16.687~s model-load phase.  With the 4~GiB VM warm,
+Qwen remained the same model at context 262144 and used a 14.721~s load phase,
+but system free-memory headroom fell to 12\%.  Total responses are not compared
+because the generated token counts differed.  The memory result fails this
+contract regardless of the faster single load sample.  Consequently, local
+process-lifetime mode remains disabled in the OpenCode registration pending a
+design that passes every gate.
+
+\section{Process-owned lifetime}
+
+\subsection*{Ownership invariant}
+
+The controller \(C\) is the sole lifetime owner of \(V\).  Exactly one VM lease,
+one runner process, and one VM instance may exist for \(L_C\).  Model output and
+model tool selection do not own this lifetime.
+
+\begin{enumerate}
+  \item \Target{} Controller initialization starts \(V\) exactly once and waits
+        for application-level \code{guest\_ready}.  The first model operation
+        may observe either ``initializing'' or ``ready'', but may not create a
+        second VM.
+  \item \Target{} Once ready, \(V\) remains running throughout \(L_C\).
+        Completion of a prompt, a final model response, an idle interval, Qwen
+        compaction, or Qwen unload is not a VM stop condition.
+  \item \Target{} Guest operations reuse the existing runner, lease, vsock
+        connection, handshake, and ready state.  An operation may not call the
+        current start--execute--stop cycle internally.
+  \item \Target{} Only controller exit initiates normal teardown.  OpenCode
+        window closure must cause controller stdin EOF, \code{SIGINT}, or
+        \code{SIGTERM}; the controller then performs bounded stop, confirms no
+        clone-disk handles, and releases its lease without another model turn.
+  \item \Implemented{} Signal and stdin-EOF cleanup handlers already exist.
+        The exact mapping from one OpenCode prompt-window closure to controller
+        exit is \Unproven{} until observed end to end.
+\end{enumerate}
+
+An unexpected runner failure may end \(V\), but must be recorded as a failed
+lifetime rather than silently replaced during a model call.  A deliberate
+restart, if later specified, is a new measured lifetime and is outside this
+contract version.
+
+\section{Warm reuse and non-interference}
+
+For \(N\geq20\) allowed guest operations in one controller lifetime, the event
+stream must contain one \code{starting}, one \code{vz\_started}, one
+\code{guest\_ready}, and no intermediate \code{stopping}, \code{stopped}, or
+runner \code{process\_exit} event.  The runner PID, machine identifier, lease
+owner, and VM identity remain constant.  There is one bounded stop sequence only
+after controller exit.
+
+Warm reuse removes repeated \(T_{ready}\) from per-operation latency.  It does
+not relax the existing operation timeout, argument, output, correlation, or
+serialization bounds.  Large guest output remains external to Qwen except for
+the already bounded receipt.  No performance claim may be based on adding a
+tool schema, instruction block, or guest transcript to Qwen's initial context.
+
+The following Qwen launch snapshot is immutable for the experiment:
+
+\begin{itemize}
+  \item provider, model tag, resolved model manifest, and model identity;
+  \item configured context capacity, output limit, and model parameters;
+  \item Ollama runtime settings, including KV type, Flash Attention,
+        parallelism, loaded-model limit, and keep-alive;
+  \item OpenCode model selection, permissions, MCP registry, instruction files,
+        skill roots, and effective configuration.
+\end{itemize}
+
+Before and after each qualification run, these fields are serialized in a
+stable order and hashed as \(H_Q\).  Acceptance requires
+\(H_Q^{before}=H_Q^{after}\).  Reducing Qwen's context, changing its model,
+changing its prompt/tool surface, or tuning its runtime invalidates the run.
+The persistent VM must not issue an Ollama unload, reload, or configuration
+operation.  Qwen may complete its normal lifecycle independently, but it may not
+stop or unload \(V\).
+
+For a fixed probe prompt, input-token count must remain identical before and
+during VM residency.  Median time to first token and median generation rate are
+measured in paired trials; the persistent VM passes only if time to first token
+regresses by no more than 5\% and generation rate regresses by no more than 5\%.
+No model eviction, context reset, out-of-memory event, or critical host-memory
+pressure is permitted in a passing trial.
+
+\section{Frozen capability surface}
+
+The performance implementation must preserve the following current surface.
+Each row is fingerprinted before and after qualification; a mismatch fails the
+run rather than being treated as a performance improvement.
+
+\begin{center}
+\small
+\begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}p{0.19\linewidth}
+                                  >{\raggedright\arraybackslash}p{0.18\linewidth} X@{}}
+\toprule
+Surface & Status & Frozen value \\
+\midrule
+Policy and limits & \Implemented & Current \code{policy.json}, including 4 GiB, 4 vCPU, 30 s startup timeout, argument limits, 32 KiB output ceiling, and serialized operation policy. \\
+Network & \Implemented & \code{isolated} blackhole Virtio network; no NAT, bridge, forwarding, host reachability, DNS service, or external egress. \\
+Host filesystem & \Implemented & One read-only \code{claudeshared} VirtioFS directory; no additional host path. \\
+VM devices & \Implemented & Current storage, entropy, memory-balloon, vsock, network, console, and VirtioFS topology. \\
+USB & \Implemented & No guest USB device is configured by the local Swift runner.  This contract neither adds nor removes USB access.  Any broader USB claim is \Unproven{} and outside this performance change. \\
+Signing & \Implemented & The local runner's current ad-hoc signature and current \code{com.apple.security.virtualization} entitlement.  No signature or entitlement is inherited from the original Claude application. \\
+Guest execution & \Implemented & Exact current allowlist only: \code{uname} with \code{[]}, \code{-a}, \code{-m}, \code{-r}, or \code{-s}; \code{id} with \code{[]}, \code{-u}, or \code{-g}; \code{python3 --version}; and \code{git --version}. \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+The target changes when the VM starts and stops, not what it can reach or run.
+Any access-surface change requires a separate contract and cannot be included in
+the measurements defined here.
+
+\section{Acceptance gates}\label{sec:gates}
+
+All gates are required.  A result set records wall-clock timestamps, process
+identifiers, VM events, Qwen snapshot hashes, model measurements, capability
+fingerprints, and final cleanup state.
+
+\begin{enumerate}[label=G\arabic*.]
+  \item \textbf{Cold-ready regression.} Run at least five alternating control
+        and candidate cold starts under the same host state.  Candidate median
+        \(T_{ready}\) must be no greater than
+        \(\max(5.075\mathrm{s},\operatorname{median}(control))+0.250\mathrm{s}\),
+        and every run must remain below the unchanged 30 s startup timeout.
+
+  \item \textbf{Single initialization.} Across at least 20 operations in one
+        controller lifetime, event counts must be exactly one start, one
+        \code{vz\_started}, and one \code{guest\_ready}; no operation may incur
+        another boot or readiness handshake.
+
+  \item \textbf{Warm residency.} The same runner PID, VM identity, lease owner,
+        and ready vsock connection must remain live between all operations.
+        Aggregate session boot cost is therefore one measured \(T_{ready}\),
+        not \(N\times T_{ready}\).
+
+  \item \textbf{Qwen invariance.} \(H_Q^{before}=H_Q^{after}\); the fixed probe
+        has identical input-token count; no Qwen model reload, eviction, context
+        reset, or configuration mutation occurs.
+
+  \item \textbf{Qwen performance.} In at least ten paired fixed-prompt trials,
+        candidate median time to first token is at most 105\% of control, and
+        candidate median generation rate is at least 95\% of control.  Any
+        out-of-memory or critical-pressure event fails the gate.  After Qwen is
+        fully loaded, host free-memory headroom must remain at least 35\% and
+        the paired interval must add zero swapouts.
+
+  \item \textbf{Capability invariance.} Policy, device topology, network mode,
+        USB surface, signing identity and entitlements, host share, and allowlist
+        fingerprints must match their pre-change values exactly.
+
+  \item \textbf{Controller-owned shutdown.} Closing the tested OpenCode prompt
+        window must terminate its controller and initiate the only normal VM
+        stop.  Within 60 s, the runner and Apple VM XPC process are absent, both
+        clone disks have no open handle, and the controller lease is absent.
+        No model tool call may be required for cleanup.
+
+  \item \textbf{Receipt completeness.} The final receipt records all preceding
+        gates and labels failures honestly.  A successful warm operation alone
+        does not establish process-owned lifetime, non-interference, or shutdown.
+\end{enumerate}
+
+\section{Current-to-target summary}
+
+\begin{center}
+\begin{tabularx}{\linewidth}{@{}l X@{}}
+\toprule
+Status & Claim \\
+\midrule
+\Implemented & Apple Virtualization start, application-level guest readiness,
+bounded allowlisted execution, serialized controller ownership, bounded stop,
+and cleanup receipts exist.  The current readiness reference is 5.075 s. \\
+\Target & One controller starts one VM, reuses it warm without model-directed
+stop, leaves Qwen and every capability fingerprint unchanged, and stops the VM
+only when that OpenCode controller exits. \\
+\Unproven & Full-lifetime Qwen/VM coexistence without measurable regression;
+the prompt-window-to-controller-exit mapping; repeatability of the 5.075 s
+reference under the target lifecycle; and any guest USB capability.  The first
+local coexistence candidate failed because free-memory headroom reached 12\%. \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+This contract is satisfied only by the complete evidence set.  It does not
+permit substituting a smaller model, shorter context, changed runtime, expanded
+access surface, or per-call VM cycle for the target behavior.
+
+\end{document}

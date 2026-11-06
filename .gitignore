@@ -1,0 +1,35 @@
+node_modules/
+__pycache__/
+*.pyc
+.DS_Store
+*.mcp.lease*
+host/ClaudeVZRunner
+host/OVMShell
+host/OVMSwarm
+host/smol-bin.arm64.img
+host/native-root/
+runtime/
+docs/build/
+tmp/
+*.log
+*.bak
+*.ovm
+vm/*.bundle/
+vm/pockets/
+vm/guest-backups/
+include/
+
+# Local history, unrelated nested checkouts, and private research inputs.
+.remember/
+DO-NOT-PUBLIC-*/
+research/
+examples/verified_neuro_decompilations.jsonl
+.env
+.env.*
+*.key
+*.pem
+
+# Keep local sibling projects and native build scratch out of publication.
+/claude-vm-mcp/
+/lbin/
+/host/.build.*/

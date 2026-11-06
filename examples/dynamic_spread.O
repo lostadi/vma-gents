@@ -1,0 +1,123 @@
+python^(
+import subprocess, json, time, os, sys
+
+ovm_bin = "ovm"
+gen0_img = "/tmp/ovm_lineage_gen0.img"
+
+print("""
+\033[1;36m╭────────────────────────────────────────────────────────────────────────╮
+│    Ostadix-lang Recursive MicroVM Mesh · Dynamic Spread & Lineage      │
+│      Self-Synthesizing Tasks · APFS Zero-Copy State Persistence       │
+╰────────────────────────────────────────────────────────────────────────╯\033[0m
+  Architecture:    Recursive Hypervisor Actor Mesh (ARM64 EL2)
+  Lineage Model:   Extents Copy-on-Write State Checkpointing
+  Language Core:   Ostadix-lang (.O Polyglot Orchestration)
+""")
+
+# =====================================================================
+# Phase 1: Generation 0 — The Scout & Environment Synthesizer
+# =====================================================================
+print("\033[1;33m═══ GENERATION 0: Environmental Probe & Task Synthesis ═══════════════\033[0m")
+print("  \033[34m▸ Instantiating Gen-0 MicroVM to probe resources & synthesize workload...\033[0m")
+
+cmd_payload = r'''
+mkdir -p /opt/mesh
+cat << 'TOOL_EOF' > /opt/mesh/tool.c
+#include <stdio.h>
+#include <stdlib.h>
+int main(int argc, char **argv) {
+    int factor = argc > 1 ? atoi(argv[1]) : 10;
+    printf("NATIVE_TOOL_GEN0_COMPUTED: factor=%d result=%d\n", factor, factor * 42);
+    return 0;
+}
+TOOL_EOF
+gcc -O3 /opt/mesh/tool.c -o /opt/mesh/native_tool
+python3 -c 'open("/opt/mesh/telemetry.txt", "w").write("\n".join(str(i*13) for i in range(8)))'
+sync
+
+echo "Environment initialized: gcc compiled /opt/mesh/native_tool and synthesized /opt/mesh/telemetry.txt"
+ls -lh /opt/mesh
+
+echo "===OVM_DYNAMIC_SPAWN==="
+cat << 'SPAWN_EOF'
+[
+  {
+    "name": "Gen1-NativeWorker",
+    "command": "/opt/mesh/native_tool 256"
+  },
+  {
+    "name": "Gen1-DataAnalytics",
+    "command": "python3 -c \"nums = [int(x) for x in open('/opt/mesh/telemetry.txt').read().splitlines() if x]; print('Dynamic Stream Sum =', sum(nums), '| Mean =', sum(nums)/len(nums))\""
+  },
+  {
+    "name": "Gen1-IntegrityAudit",
+    "command": "ls -l /opt/mesh && sha256sum /opt/mesh/native_tool"
+  }
+]
+SPAWN_EOF
+echo "===OVM_DYNAMIC_SPAWN_END==="
+'''
+
+gen0_spec = [
+    {
+        "name": "Gen0-Synthesizer",
+        "preserveRootfs": gen0_img,
+        "command": cmd_payload
+    }
+]
+
+t_start = time.time()
+cmd0 = [ovm_bin, "fleet", "--tasks-json", json.dumps(gen0_spec), "--json"]
+p0 = subprocess.check_output(cmd0).decode()
+data0 = json.loads(p0)
+w0 = data0["workers"][0]
+
+print(f"\033[1;32m✓ Gen-0 completed in {w0['totalMs']:.1f} ms (Boot: {w0['bootMs']:.1f}ms | Exec: {w0['execMs']:.1f}ms)\033[0m")
+for line in w0["output"].splitlines():
+    if line.strip() and not line.startswith("==="):
+        print(f"    │ {line.strip()}")
+
+children = w0["dynamicSpawn"]
+print(f"\n  \033[1;35m↳ Dynamic Downstream Tasks Synthesized by Gen-0 ({len(children)} jobs):\033[0m")
+for c in children:
+    print(f"    ✦ \033[1m{c['name']}\033[0m: {c['command']}")
+    c["baseRootfs"] = gen0_img
+
+# =====================================================================
+# Phase 2: Generation 1 — The APFS CoW Lineage Spread
+# =====================================================================
+print(f"\n\033[1;33m═══ GENERATION 1: The CoW Lineage Spread ({len(children)} Parallel MicroVMs) ═════\033[0m")
+print(f"  \033[34m▸ Spreading into {len(children)} child microVMs branched from Gen-0 state...\033[0m")
+
+cmd1 = [ovm_bin, "fleet", "--tasks-json", json.dumps(children), "--json"]
+p1 = subprocess.check_output(cmd1).decode()
+data1 = json.loads(p1)
+
+print(f"\033[1;32m✓ Generation 1 completed in {data1['globalElapsedMs']:.1f} ms!\033[0m\n")
+for w in data1["workers"]:
+    print(f"  ▸ \033[1;35m{w['agent']}\033[0m (Inherited Gen-0 State): CoW fork {w['cloneMs']:.2f}ms | Boot {w['bootMs']:.1f}ms")
+    for line in w["output"].splitlines():
+        if line.strip():
+            print(f"    │ {line.strip()}")
+    print()
+
+# =====================================================================
+# Phase 3: Recursive Mesh Telemetry
+# =====================================================================
+total_elapsed = (time.time() - t_start) * 1000.0
+total_vms = 1 + len(data1["workers"])
+
+print(f"""\033[1;33m═══ RECURSIVE MESH TELEMETRY (Ostadix-lang Lineage Report) ════════════\033[0m
+  Lineage Generations:      2 (Gen-0 Seeder → Gen-1 Dynamic Spread)
+  Total MicroVMs Dispatched: {total_vms} hardware-isolated nodes
+  APFS Lineage Fork Latency: {data1['workers'][0]['cloneMs']:.2f} ms (0-byte extent copy)
+  Total Cumulative Walltime: {total_elapsed:.1f} ms
+  Permanent Storage Residue: 0 bytes (Net Zero)
+\033[32m✓ Lineage checkpoint reclaimed. Zero disk residue.\033[0m
+""")
+
+if os.path.exists(gen0_img):
+    os.unlink(gen0_img)
+if os.path.exists("/tmp/test_spread.py"):
+    os.unlink("/tmp/test_spread.py")
+)_python

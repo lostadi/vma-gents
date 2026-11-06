@@ -1,0 +1,143 @@
+#!/usr/bin/env O
+# Ostadix-owned, single-call fail-closed receipt for Lee's private Claude VM clone.
+
+python^(
+from pathlib import Path
+import hashlib
+import json
+import os
+import re
+import shutil
+import subprocess
+import time
+
+home = Path.home()
+default_project = home / "o-gents" if (home / "o-gents").is_dir() else home / "vma-gents" if (home / "vma-gents").is_dir() else home / "claude-vm-mcp"
+project = Path(os.environ.get("CLAUDE_VM_ROOT", default_project)).expanduser().resolve()
+source = Path(os.environ.get(
+    "CLAUDE_VM_SOURCE_BUNDLE",
+    home / "Library" / "Application Support" / "Claude" / "vm_bundles" / "claudevm.bundle",
+)).expanduser().resolve()
+clone = project / "vm" / "claudevm.bundle"
+node_value = os.environ.get("CLAUDE_VM_NODE") or shutil.which("node")
+if not node_value:
+    raise RuntimeError("Node 26 or newer is unavailable on PATH")
+node = Path(node_value)
+script = project / "scripts" / "cycle-smoke.mjs"
+server = project / "src" / "server.mjs"
+lease = Path(str(clone.resolve()) + ".mcp.lease")
+
+def digest(path):
+    h = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            h.update(block)
+    return h.hexdigest()
+
+identity_names = ("machineIdentifier", "gvisorMacAddress", "efivars.fd")
+source_before = {name: digest(source / name) for name in identity_names}
+
+timed_out = False
+try:
+    proc = subprocess.run(
+        [str(node), str(script)],
+        cwd=project,
+        capture_output=True,
+        text=True,
+        timeout=180,
+    )
+except subprocess.TimeoutExpired as error:
+    timed_out = True
+    def timeout_text(value):
+        if isinstance(value, bytes):
+            return value.decode("utf-8", errors="replace")
+        return value or ""
+    proc = subprocess.CompletedProcess(
+        error.cmd,
+        124,
+        stdout=timeout_text(error.stdout),
+        stderr=timeout_text(error.stderr) + "\nOstadix lifecycle client timed out",
+    )
+
+try:
+    cycle = json.loads((proc.stdout or "").strip())
+except json.JSONDecodeError:
+    cycle = {"decode_error": True, "stdout_tail": (proc.stdout or "")[-2000:]}
+
+source_after = {name: digest(source / name) for name in identity_names}
+disk_paths = [str(clone / name) for name in ("rootfs.img", "sessiondata.img", "efivars.fd")]
+def probe(command):
+    return subprocess.run(command, capture_output=True, text=True, timeout=10)
+
+probe_started = time.monotonic()
+max_probe_attempts = 701 if proc.returncode != 0 else 31
+for probe_attempt in range(max_probe_attempts):
+    lsof = probe(["/usr/sbin/lsof", "-t", "--", *disk_paths])
+    runner = probe(["/usr/bin/pgrep", "-x", "ClaudeVZRunner"])
+    controller = probe([
+        "/usr/bin/pgrep", "-f",
+        f"^{re.escape(str(node))} {re.escape(str(server))}$",
+    ])
+    probes_quiet = all(
+        item.returncode in (0, 1)
+        and not (item.stderr or "").strip()
+        and not (item.stdout or "").strip()
+        for item in (lsof, runner, controller)
+    )
+    if probes_quiet:
+        break
+    time.sleep(0.1)
+probe_elapsed_seconds = round(time.monotonic() - probe_started, 3)
+
+final_status = cycle.get("after") or cycle.get("afterFailure") or {}
+lifecycle = final_status.get("lifecycle") or {}
+controller_lease = final_status.get("controllerLease") or {}
+cycle_result = cycle.get("cycle") or {}
+transaction_ok = (
+    proc.returncode == 0
+    and cycle_result.get("completed") is True
+    and lifecycle.get("running") is False
+    and controller_lease.get("held") is False
+)
+cleanup_clean = (
+    not lease.exists()
+    and lsof.returncode in (0, 1)
+    and not (lsof.stderr or "").strip()
+    and not (lsof.stdout or "").strip()
+    and runner.returncode in (0, 1)
+    and not (runner.stderr or "").strip()
+    and not (runner.stdout or "").strip()
+    and controller.returncode in (0, 1)
+    and not (controller.stderr or "").strip()
+    and not (controller.stdout or "").strip()
+    and source_before == source_after
+)
+clean = transaction_ok and cleanup_clean
+
+console = ((cycle_result.get("console") or {}).get("text") or "")
+__oval_result__ = {
+    "ok": clean,
+    "control_plane": "Ostadix-lang .O",
+    "cleanup_invariants": "verified" if cleanup_clean else "unverified",
+    "cleanup_probe_seconds": probe_elapsed_seconds,
+    "timed_out": timed_out,
+    "cycle_completed": cycle_result.get("completed") is True,
+    "final_status_reported_stopped": lifecycle.get("running") is False,
+    "stopped": probes_quiet,
+    "lease_released": not lease.exists(),
+    "disk_handles": [line for line in (lsof.stdout or "").splitlines() if line],
+    "disk_probe_error": (lsof.stderr or "").strip() or None,
+    "runner_pids": [line for line in (runner.stdout or "").splitlines() if line],
+    "runner_probe_error": (runner.stderr or "").strip() or None,
+    "controller_pids": [line for line in (controller.stdout or "").splitlines() if line],
+    "controller_probe_error": (controller.stderr or "").strip() or None,
+    "source_identity_unchanged": source_before == source_after,
+    "console_tail": console[-1024:],
+    "node_exit": proc.returncode,
+    "stderr_tail": (proc.stderr or "")[-1000:],
+    "error": cycle.get("error"),
+}
+
+if not clean:
+    raise RuntimeError(json.dumps(__oval_result__, sort_keys=True))
+)_python

@@ -1,0 +1,61 @@
+{
+  "name": "vma-gents",
+  "version": "0.5.0",
+  "private": true,
+  "type": "module",
+  "description": "Local agents with persistent Linux VMs, Ostadix execution, and peer checks.",
+  "engines": {
+    "node": ">=26.0.0"
+  },
+  "scripts": {
+    "build:native": "./scripts/build-swift-runner.zsh",
+    "install:prebuilt": "./scripts/install-prebuilt.zsh",
+    "install:native": "./scripts/install-native-capabilities.zsh",
+    "research:verify": "./scripts/verify-decoded-claude.zsh",
+    "native:probe": "./bin/ovm-native probe",
+    "model:setup": "ollama pull hf.co/okenk/Huihui-Spark-X2.5-4B-abliterated-GGUF:Q4_K_M && ollama create huihui-spark-vm:32k -f Modelfile.huihui-spark-vm-32k",
+    "model:chat": "ollama run huihui-spark-vm:32k",
+    "swarm": "./bin/ovm-pocket",
+    "swarm:dry-run": "./bin/ovm-pocket --spec examples/pocket-swarm.json --dry-run",
+    "test": "node --test test/*.test.mjs",
+    "start": "node ./scripts/start.mjs",
+    "chat": "./bin/gent chat",
+    "mcp": "./bin/claude-vm-mcp",
+    "verify:ostadix-peer": "node scripts/verify-ostadix-peer.mjs --run"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "zod": "4.6.7"
+  },
+  "main": "index.js",
+  "bin": {
+    "gent": "bin/gent",
+    "claude-vm-mcp": "bin/claude-vm-mcp",
+    "ovm": "bin/ovm",
+    "ovm-native": "bin/ovm-native",
+    "ovm-pocket": "bin/ovm-pocket"
+  },
+  "directories": {
+    "doc": "docs",
+    "example": "examples",
+    "test": "test"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.2",
+    "typescript": "^7.0.2"
+  },
+  "keywords": [
+    "autonomous-agents",
+    "microvm",
+    "virtual-machine",
+    "ollama",
+    "local-ai"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lostadi/vma-gents.git"
+  },
+  "homepage": "https://github.com/lostadi/vma-gents#readme",
+  "author": "Lee Daghlar Ostadi",
+  "license": "ISC"
+}

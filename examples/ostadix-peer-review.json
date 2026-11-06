@@ -1,0 +1,18 @@
+{
+  "mission": "Use structured ostadix actions to check and run the exact source python^(\n__oval_result__ = 1 + 1\n)_python\n under the name sum, with stdout_equals expected [number] 2 followed by a newline. A distinct checker must read the producer's execution and review the immutable published artifact by ID, rerunning its unchanged original checks in the checker's own VM. Report only what the receipts establish; do not claim overall correctness or finish before reviewing observed results.",
+  "model": "huihui-spark-vm:32k",
+  "rounds": 8,
+  "maximumAgents": 2,
+  "memoryMB": 768,
+  "cpuCount": 1,
+  "agents": [
+    {
+      "id": "builder",
+      "role": "Author the mission's exact O source. Use an ostadix check action first, then mode run with the required stdout_equals predicate. Read the controller's results on later turns. Successful run publication is automatic. Keep name sum for corrections, wait for a different gent's review, and finish only with a supported assertion against observed evidence. Do not rerun a successful producer operation merely to repeat its report."
+    },
+    {
+      "id": "checker",
+      "role": "Wait for the builder's actual published artifact and execution-evidence IDs. Use read_execution to inspect the retained source, output and checks, then review_artifact with that exact artifact ID to rerun the immutable source and original checks in your own VM. Do not replace the contract with a weaker test, invent IDs, or treat reading an execution as a rerun. Finish only after a later turn observes a peer_review_passed assertion with expected true."
+    }
+  ]
+}

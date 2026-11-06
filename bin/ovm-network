@@ -1,0 +1,8 @@
+#!/usr/bin/env node
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { runNetworkCli } from "../src/guest-network.mjs";
+
+const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+try { process.exitCode = await runNetworkCli(process.argv.slice(2), { projectRoot }); }
+catch (error) { process.stderr.write(`ovm network: ${error.message}\n`); process.exitCode = 1; }

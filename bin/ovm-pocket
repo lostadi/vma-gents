@@ -1,0 +1,11 @@
+#!/usr/bin/env node
+
+import { runSwarmCli } from "../src/swarm-cli.mjs";
+
+runSwarmCli(process.argv.slice(2)).then(
+  (code) => { process.exitCode = code; },
+  (error) => {
+    process.stderr.write(`ovm swarm: ${error.message}\n`);
+    process.exitCode = 1;
+  },
+);

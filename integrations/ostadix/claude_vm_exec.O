@@ -1,0 +1,317 @@
+#!/usr/bin/env O
+# Ostadix-owned receipt for one allowlisted guest command in Lee's private VM clone.
+
+python^(
+from pathlib import Path
+import hashlib
+import json
+import os
+import re
+import shutil
+import subprocess
+import time
+
+home = Path.home()
+default_project = home / "o-gents" if (home / "o-gents").is_dir() else home / "vma-gents" if (home / "vma-gents").is_dir() else home / "claude-vm-mcp"
+project = Path(os.environ.get("CLAUDE_VM_ROOT", default_project)).expanduser().resolve()
+source = Path(os.environ.get(
+    "CLAUDE_VM_SOURCE_BUNDLE",
+    home / "Library" / "Application Support" / "Claude" / "vm_bundles" / "claudevm.bundle",
+)).expanduser().resolve()
+clone = project / "vm" / "claudevm.bundle"
+node_value = os.environ.get("CLAUDE_VM_NODE") or shutil.which("node")
+if not node_value:
+    raise RuntimeError("Node 26 or newer is unavailable on PATH")
+node = Path(node_value)
+script = project / "scripts" / "exec-smoke.mjs"
+server = project / "src" / "server.mjs"
+lease = Path(str(clone.resolve()) + ".mcp.lease")
+
+def digest(path):
+    value = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            value.update(block)
+    return value.hexdigest()
+
+identity_names = ("machineIdentifier", "gvisorMacAddress", "efivars.fd")
+source_before = {name: digest(source / name) for name in identity_names}
+
+probe_failures = []
+
+def timeout_text(value):
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value or ""
+
+def probe(command):
+    try:
+        return subprocess.run(command, capture_output=True, text=True, timeout=10)
+    except subprocess.TimeoutExpired as error:
+        failure = {
+            "command": command,
+            "kind": "timeout",
+            "timeout_seconds": error.timeout,
+        }
+        probe_failures.append(failure)
+        return subprocess.CompletedProcess(
+            command,
+            124,
+            stdout=timeout_text(error.stdout),
+            stderr=timeout_text(error.stderr) + "\nprobe timed out",
+        )
+    except OSError as error:
+        failure = {
+            "command": command,
+            "kind": "os_error",
+            "error": f"{type(error).__name__}: {error}",
+        }
+        probe_failures.append(failure)
+        return subprocess.CompletedProcess(
+            command,
+            126,
+            stdout="",
+            stderr=failure["error"],
+        )
+
+controller_command = [
+    "/usr/bin/pgrep", "-f",
+    f"^{re.escape(str(node))} {re.escape(str(server))}$",
+]
+controller_before = probe(controller_command)
+baseline_controller_lines = [
+    line for line in (controller_before.stdout or "").splitlines() if line
+]
+controller_baseline_established = (
+    controller_before.returncode in (0, 1)
+    and not (controller_before.stderr or "").strip()
+    and all(line.isdigit() for line in baseline_controller_lines)
+    and (
+        (controller_before.returncode == 0 and bool(baseline_controller_lines))
+        or (controller_before.returncode == 1 and not baseline_controller_lines)
+    )
+)
+baseline_controller_pids = {
+    line for line in baseline_controller_lines if controller_baseline_established
+}
+
+timed_out = False
+client_started = controller_baseline_established
+if client_started:
+    try:
+        proc = subprocess.run(
+            [str(node), str(script)],
+            cwd=project,
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+    except subprocess.TimeoutExpired as error:
+        timed_out = True
+        proc = subprocess.CompletedProcess(
+            error.cmd,
+            124,
+            stdout=timeout_text(error.stdout),
+            stderr=timeout_text(error.stderr) + "\nOstadix guest execution client timed out",
+        )
+    except OSError as error:
+        proc = subprocess.CompletedProcess(
+            [str(node), str(script)],
+            126,
+            stdout=json.dumps({"error": f"could not launch guest execution client: {error}"}),
+            stderr=f"{type(error).__name__}: {error}",
+        )
+else:
+    proc = subprocess.CompletedProcess(
+        [str(node), str(script)],
+        125,
+        stdout=json.dumps({"error": "could not establish the pre-existing MCP controller baseline"}),
+        stderr=(controller_before.stderr or "").strip(),
+    )
+
+try:
+    decoded_receipt = json.loads((proc.stdout or "").strip())
+    if isinstance(decoded_receipt, dict):
+        receipt = decoded_receipt
+    else:
+        receipt = {
+            "decode_error": True,
+            "error": "guest execution client returned JSON that was not an object",
+            "json_type": type(decoded_receipt).__name__,
+            "stdout_tail": (proc.stdout or "")[-2000:],
+        }
+except json.JSONDecodeError as error:
+    receipt = {
+        "decode_error": True,
+        "error": f"guest execution client returned invalid JSON: {error}",
+        "stdout_tail": (proc.stdout or "")[-2000:],
+    }
+
+source_after = {name: digest(source / name) for name in identity_names}
+disk_paths = [str(clone / name) for name in ("rootfs.img", "sessiondata.img", "efivars.fd")]
+
+probe_started = time.monotonic()
+max_probe_attempts = 701 if client_started and proc.returncode != 0 else 31
+for probe_attempt in range(max_probe_attempts):
+    lsof = probe(["/usr/sbin/lsof", "-t", "--", *disk_paths])
+    runner = probe(["/usr/bin/pgrep", "-x", "ClaudeVZRunner"])
+    controller = probe(controller_command)
+    final_controller_lines = [
+        line for line in (controller.stdout or "").splitlines() if line
+    ]
+    final_controller_state_valid = (
+        controller.returncode in (0, 1)
+        and not (controller.stderr or "").strip()
+        and all(line.isdigit() for line in final_controller_lines)
+        and (
+            (controller.returncode == 0 and bool(final_controller_lines))
+            or (controller.returncode == 1 and not final_controller_lines)
+        )
+    )
+    final_controller_pids = set(final_controller_lines) if final_controller_state_valid else set()
+    unexpected_controller_pids = final_controller_pids - baseline_controller_pids
+    probes_quiet = all(
+        item.returncode in (0, 1)
+        and not (item.stderr or "").strip()
+        and not (item.stdout or "").strip()
+        for item in (lsof, runner)
+    ) and controller_baseline_established \
+        and final_controller_state_valid \
+        and not unexpected_controller_pids
+    if probes_quiet:
+        break
+    time.sleep(0.1)
+probe_elapsed_seconds = round(time.monotonic() - probe_started, 3)
+
+def object_or_empty(value):
+    return value if isinstance(value, dict) else {}
+
+def is_nonnegative_integer(value):
+    return type(value) is int and value >= 0
+
+requested = object_or_empty(receipt.get("request"))
+before = object_or_empty(receipt.get("before"))
+before_lifecycle = object_or_empty(before.get("lifecycle"))
+before_controller_lease = object_or_empty(before.get("controllerLease"))
+execution = object_or_empty(receipt.get("execution"))
+readiness = object_or_empty(execution.get("readiness"))
+cleanup = object_or_empty(execution.get("cleanup"))
+after = object_or_empty(receipt.get("after") or receipt.get("afterFailure"))
+lifecycle = object_or_empty(after.get("lifecycle"))
+controller_lease = object_or_empty(after.get("controllerLease"))
+stdout_text = execution.get("stdout")
+stderr_text = execution.get("stderr")
+architecture = stdout_text.strip() if isinstance(stdout_text, str) else ""
+output_bytes = object_or_empty(execution.get("outputBytes"))
+actual_stdout_bytes = len(stdout_text.encode("utf-8")) if isinstance(stdout_text, str) else -1
+actual_stderr_bytes = len(stderr_text.encode("utf-8")) if isinstance(stderr_text, str) else -1
+output_cap_verified = (
+    is_nonnegative_integer(output_bytes.get("stdout"))
+    and is_nonnegative_integer(output_bytes.get("stderr"))
+    and is_nonnegative_integer(output_bytes.get("total"))
+    and is_nonnegative_integer(output_bytes.get("limit"))
+    and is_nonnegative_integer(output_bytes.get("streamed"))
+    and output_bytes.get("stdout") == actual_stdout_bytes
+    and output_bytes.get("stderr") == actual_stderr_bytes
+    and output_bytes.get("total") == actual_stdout_bytes + actual_stderr_bytes
+    and output_bytes.get("limit") == 32 * 1024
+    and output_bytes.get("total") <= output_bytes.get("limit")
+    and output_bytes.get("streamed") <= output_bytes.get("limit")
+)
+request_verified = (
+    requested.get("program") == "uname"
+    and requested.get("args") == ["-m"]
+    and requested.get("timeoutSeconds") == 10
+)
+pre_status_verified = (
+    before_lifecycle.get("running") is False
+    and before_controller_lease.get("held") is False
+)
+execution_contract_verified = (
+    execution.get("program") == "uname"
+    and execution.get("networkMode") == "isolated"
+    and execution.get("timeoutSeconds") == 10
+    and execution.get("untrustedGuestOutput") is True
+    and execution.get("truncated") is False
+)
+server_cleanup_verified = (
+    cleanup.get("verified") is True
+    and cleanup.get("stopped") is True
+    and cleanup.get("leaseReleased") is True
+    and cleanup.get("runnerRunning") is False
+    and cleanup.get("controllerLeaseHeld") is False
+)
+post_status_verified = (
+    lifecycle.get("running") is False
+    and controller_lease.get("held") is False
+)
+
+transaction_ok = (
+    proc.returncode == 0
+    and request_verified
+    and pre_status_verified
+    and execution.get("completed") is True
+    and readiness.get("guestReady") is True
+    and execution.get("exitCode") == 0
+    and architecture in ("aarch64", "arm64")
+    and execution_contract_verified
+    and output_cap_verified
+    and server_cleanup_verified
+    and post_status_verified
+)
+host_cleanup_verified = (
+    controller_baseline_established
+    and not lease.exists()
+    and lsof.returncode in (0, 1)
+    and not (lsof.stderr or "").strip()
+    and not (lsof.stdout or "").strip()
+    and runner.returncode in (0, 1)
+    and not (runner.stderr or "").strip()
+    and not (runner.stdout or "").strip()
+    and final_controller_state_valid
+    and not unexpected_controller_pids
+    and source_before == source_after
+)
+combined_cleanup_verified = server_cleanup_verified and host_cleanup_verified
+clean = transaction_ok and combined_cleanup_verified
+
+__oval_result__ = {
+    "ok": clean,
+    "control_plane": "Ostadix-lang .O",
+    "operation": "allowlisted network-isolated guest exec cycle",
+    "program": execution.get("program"),
+    "network_mode": execution.get("networkMode"),
+    "architecture": architecture or None,
+    "request_verified": request_verified,
+    "pre_stopped": pre_status_verified,
+    "execution_contract_verified": execution_contract_verified,
+    "guest_ready": readiness.get("guestReady") is True,
+    "guest_exit_code": execution.get("exitCode"),
+    "untrusted_guest_output": execution.get("untrustedGuestOutput") is True,
+    "output_bytes": execution.get("outputBytes"),
+    "output_cap_verified": output_cap_verified,
+    "server_cleanup_verified": server_cleanup_verified,
+    "host_cleanup_verified": host_cleanup_verified,
+    "cleanup_invariants": "verified" if combined_cleanup_verified else "unverified",
+    "cleanup_probe_seconds": probe_elapsed_seconds,
+    "controller_baseline_established": controller_baseline_established,
+    "probe_failures": probe_failures,
+    "client_started": client_started,
+    "receipt_decode_error": receipt.get("decode_error") is True,
+    "timed_out": timed_out,
+    "stopped": probes_quiet and not lease.exists(),
+    "lease_released": not lease.exists(),
+    "disk_handles": [line for line in (lsof.stdout or "").splitlines() if line],
+    "runner_pids": [line for line in (runner.stdout or "").splitlines() if line],
+    "preexisting_controller_pids": sorted(baseline_controller_pids),
+    "final_controller_pids": sorted(final_controller_pids),
+    "unexpected_controller_pids": sorted(unexpected_controller_pids),
+    "source_identity_unchanged": source_before == source_after,
+    "node_exit": proc.returncode,
+    "stderr_tail": (proc.stderr or "")[-1000:],
+    "error": receipt.get("error"),
+}
+
+if not clean:
+    raise RuntimeError(json.dumps(__oval_result__, sort_keys=True))
+)_python

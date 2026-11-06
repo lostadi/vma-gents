@@ -1,0 +1,16 @@
+*.O text eol=lf
+*.c text eol=lf
+*.html text eol=lf
+*.json text eol=lf
+*.jsonc text eol=lf
+*.jsonl text eol=lf
+*.md text eol=lf
+*.mjs text eol=lf
+*.swift text eol=lf
+*.zsh text eol=lf
+*.png binary
+prebuilt/macos-arm64/ClaudeVZRunner binary
+prebuilt/macos-arm64/OVMShell binary
+prebuilt/macos-arm64/OVMSwarm binary
+research/decoded-claude/sources/*.c text eol=lf -whitespace
+research/decoded-claude/native-binding-atlas/snippets/*.txt text eol=lf -whitespace

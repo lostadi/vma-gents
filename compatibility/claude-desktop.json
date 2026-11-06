@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "profileId": "claude-vm-arm64-reviewed-2026-08-27",
+  "platform": {
+    "os": "macOS",
+    "architecture": "arm64",
+    "minimumVersion": "14.0"
+  },
+  "bundle": {
+    "rootfsOrigin": "6d1538ba6fecc4e5c5583993c4b30bb1875f0f5a",
+    "vmlinuzSha256": "f194146cb0f7b2ecef8aa44eb29856ece17d952395763dd3669afe30d0485c4a",
+    "initrdSha256": "e33269402446506bf13c609eef38358bb16eb7698b62e1f34e30d47c9eb25560"
+  },
+  "helper": {
+    "filename": "smol-bin.arm64.img",
+    "sha256": "e34ed7904e1be2ab9f99ac749fe40073bdc4c0d41efca28f2b11ac0441bdada8",
+    "sizeBytes": 24117248
+  },
+  "qualification": {
+    "lastLiveCycle": "2026-08-27",
+    "claudeDesktopVersion": "unrecorded"
+  }
+}

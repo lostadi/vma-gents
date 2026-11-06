@@ -1,0 +1,33 @@
+#!/bin/zsh
+set -euo pipefail
+
+project_root=${0:A:h:h}
+node=${CLAUDE_VM_NODE:-${commands[node]:-}}
+runner="$project_root/host/ClaudeVZRunner"
+
+if [[ ! -x "$runner" ]]; then
+  runner="$project_root/prebuilt/macos-arm64/ClaudeVZRunner"
+fi
+
+[[ -n "$node" && -x "$node" ]] || {
+  print -u2 "Node 26 or newer is unavailable on PATH"
+  exit 78
+}
+node_major=$("$node" -p 'Number(process.versions.node.split(".")[0])')
+[[ "$node_major" == <-> && "$node_major" -ge 26 ]] || {
+  print -u2 "Node 26 or newer is required; found: $($node --version 2>/dev/null || print unknown)"
+  exit 78
+}
+[[ -x "$runner" ]] || {
+  print -u2 "Swift VM runner is not built. Run: $project_root/scripts/build-swift-runner.zsh"
+  exit 78
+}
+
+export CLAUDE_VM_POLICY=${CLAUDE_VM_POLICY:-"$project_root/policy.json"}
+export CLAUDE_VM_RUNNER=${CLAUDE_VM_RUNNER:-"$runner"}
+
+if [[ -t 0 ]]; then
+  print -u2 "o-gents MCP server: waiting for client protocol messages. For chat, press Ctrl+C and run: gent chat"
+fi
+
+exec "$node" "$project_root/src/server.mjs"

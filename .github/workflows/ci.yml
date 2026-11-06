@@ -1,0 +1,39 @@
+name: vma-gents checks
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: npm
+      - run: npm ci
+      - name: Check launcher and installer syntax
+        run: zsh -n scripts/*.zsh
+      - name: Install sparse checkpoint transfer support
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: 1
+        run: brew install rsync
+      - run: npm test
+      - run: npm audit --omit=dev
+      - name: Verify committed launchers
+        run: |
+          cd prebuilt/macos-arm64
+          shasum -a 256 -c SHA256SUMS
+          codesign --verify --strict --verbose=2 ClaudeVZRunner
+          codesign --verify --strict --verbose=2 OVMShell
+          codesign --verify --strict --verbose=2 OVMSwarm
+      - name: Run the Apple Virtualization support probe on ARM64
+        run: |
+          if [[ "$(uname -m)" == arm64 ]]; then
+            ./prebuilt/macos-arm64/ClaudeVZRunner --support-only
+          fi

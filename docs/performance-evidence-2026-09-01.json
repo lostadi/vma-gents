@@ -1,0 +1,70 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-09-01T21:12:00-04:00",
+  "host": {
+    "platform": "macOS arm64",
+    "memoryGiB": 64
+  },
+  "unchangedSurfaces": [
+    "q3.8 model and manifest",
+    "q3.8 context 262144",
+    "Ollama runtime configuration",
+    "VM policy.json",
+    "guest program allowlist",
+    "network and host share",
+    "VM devices and USB surface",
+    "runner signature and entitlements"
+  ],
+  "transactionBaseline": {
+    "guestReadyMilliseconds": 5075,
+    "cleanupVerified": true
+  },
+  "processLifetime": {
+    "guestReadyMilliseconds": 3551,
+    "startCalls": 1,
+    "operationCount": 20,
+    "operationSuccesses": 20,
+    "operationLatencyMilliseconds": {
+      "minimum": 238.674708,
+      "median": 274.067875,
+      "p95": 373.225916,
+      "maximum": 519.575375
+    },
+    "controllerCloseMilliseconds": 744.298334,
+    "cleanup": {
+      "runnerAlive": false,
+      "diskOpenPids": [],
+      "leasePresent": false,
+      "verified": true
+    }
+  },
+  "qwenControlNoVm": {
+    "model": "q3.8:latest",
+    "manifestPrefix": "d7fc42486103",
+    "loadDurationNanoseconds": 16687250916,
+    "totalDurationNanoseconds": 19824834833,
+    "generatedTokens": 22
+  },
+  "qwenCandidateWithWarmVm": {
+    "model": "q3.8:latest",
+    "manifestPrefix": "d7fc42486103",
+    "context": 262144,
+    "loadDurationNanoseconds": 14721110292,
+    "totalDurationNanoseconds": 18355555750,
+    "generatedTokens": 34,
+    "systemFreeMemoryPercent": 12,
+    "passedNonInterferenceGate": false,
+    "failure": "post-load free-memory headroom was below the unchanged 35 percent requirement"
+  },
+  "enablement": {
+    "openCodeProcessLifetimeEnabled": false,
+    "reason": "local q3.8 plus 4 GiB VM coexistence failed the memory non-interference gate"
+  },
+  "finalState": {
+    "ollamaModelsLoaded": 0,
+    "claudeVzRunnerProcesses": 0,
+    "cloneDiskOpenPids": [],
+    "controllerLeasePresent": false,
+    "systemFreeMemoryPercent": 86
+  }
+}
