@@ -52,6 +52,14 @@ The Bun lockfile was migrated from the updated npm lockfile. No forced major
 dependency upgrade was used. The audit result describes the advisory database
 at verification time, not a permanent security guarantee.
 
+## GitHub Actions runner
+
+The initial remote run was cancelled before executing any steps because the
+inherited `macos-14` configuration was unsupported. The workflow now selects
+`macos-26`, a supported ARM64 runner listed in the
+[GitHub-hosted runner reference](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
+Its job result is recorded in [Actions](https://github.com/lostadi/vma-gents/actions).
+
 ## Scope
 
 No actual VM boot, model inference, browser navigation inside a guest, remote
