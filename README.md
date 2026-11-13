@@ -10,6 +10,12 @@
   <a href="LICENSE">ISC</a>
 </p>
 
+<p align="center">
+
+[![M8ven Score](https://m8ven.ai/badge/mcp/lostadi-vma-gents-b8o63h?v=e925e71ee260c74bd2b077029507f379)](https://m8ven.ai/mcp/lostadi-vma-gents-b8o63h?s=readme)
+
+</p>
+
 **An agent with a VM of its own. Each one is a gent.**
 
 I want a local agent to have somewhere to work: a machine, files that survive
