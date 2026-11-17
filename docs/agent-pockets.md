@@ -21,7 +21,7 @@ gent resume GENT_ID
 
 Use `gent mode auto`, `gent mode local`, and `gent mode required` for the saved
 placement choice. `gent peers` shows connected controllers; `gent connect HOST`
-enrolls an already prepared, trusted Apple or QEMU o-gents host using existing SSH.
+enrolls an already prepared, trusted Apple or QEMU vma-gents host using existing SSH.
 Task/chat flags work before or after the quoted request. Interactive chat uses
 one gent, six reasoning rounds by default, and `/bye`, `/status`, `/help`.
 Its `reply` action yields to the user without completing the mission; a quoted
@@ -35,7 +35,7 @@ chat message performs one conversational turn and exits.
                             |
                  typed JSON action protocol
                             |
-       +------------- o-gents broker --------------+
+       +------------- vma-gents broker --------------+
        |                    |                       |
   host native          peer mailboxes          lineage manager
   capability broker         |                       |
@@ -176,7 +176,7 @@ need to inspect their contents or execute relevant tests before claiming the
 artifact satisfies the task. Files in VM disks remain unrestricted by this
 handoff budget; the limit applies to this explicit small-artifact channel.
 
-o-gents transfers a VM command as base64 data, reconstructs it inside the guest,
+vma-gents transfers a VM command as base64 data, reconstructs it inside the guest,
 caps ordinary command output at 64 KiB (400 KiB for its fixed artifact capture
 receipt), records the actual exit code, then
 powers the VM down and preserves its copy-on-write rootfs.
@@ -218,10 +218,10 @@ truncated; the full bounded result remains in the saved transcript.
 
 ## Native capability provider
 
-`capabilities/claude-native.json` maps semantic o-gents names to recovered native
+`capabilities/claude-native.json` maps semantic vma-gents names to recovered native
 member paths and records whether each mapping is runtime verified or based only
 on decoded registration evidence. Install the qualified private binaries into
-o-gents's ignored local store, then inspect them:
+vma-gents's ignored local store, then inspect them:
 
 ```zsh
 ./scripts/install-native-capabilities.zsh
@@ -258,7 +258,7 @@ OVM_NATIVE_ALLOW_ACT=1 gent swarm \
 
 The Swift desktop addon is not loaded by this provider. In a plain CLI process
 it initializes application notification services and aborts because there is no
-macOS application bundle. o-gents uses the separately loadable `computer_use.node`
+macOS application bundle. vma-gents uses the separately loadable `computer_use.node`
 for displays, running applications, and permission status.
 
 ## Placement and recovery
@@ -272,7 +272,7 @@ VM commands use the selected host's Apple or QEMU backend. Guest-to-guest
 program access uses Nebula plus native Ostadix `o-node`.
 
 `gent connect HOST --name laptop` checks the destination and enrolls its guests in
-the shared network. An optional `--path /absolute/path/to/o-gents` locates
+the shared network. An optional `--path /absolute/path/to/vma-gents` locates
 its installation; `--node /absolute/path/to/node` selects a private Node 26+
 interpreter there. Controllers also need rsync and enough storage for private
 copies and checkpoints. `gent peers --discover` lists Tailscale machines without
@@ -282,7 +282,7 @@ does not revoke network credentials. See [networking](networking.md).
 The remote controller records dispatch identity, execution state and generation.
 After each completed round, the initiating controller receives stopped-disk
 checkpoints. A lost response after submission can mean the command already ran;
-o-gents retains that pending dispatch and `gent resume ID` queries its status
+vma-gents retains that pending dispatch and `gent resume ID` queries its status
 before doing more work. It does not replay uncertain commands locally. Known
 pre-dispatch rejection or an acknowledged complete checkpoint can permit
 automatic local recovery. Required mode and explicit `--on NAME` preserve the
@@ -290,7 +290,7 @@ requested destination and report unavailable capacity.
 
 The source-oriented integration `integrations/ostadix/pocket_swarm.O` remains
 available. A caller can submit it through an Ostadix hosted node when that host
-has a compatible o-gents installation. This is separate from the automatic SSH
+has a compatible vma-gents installation. This is separate from the automatic SSH
 controller transport and from guest-native `ovm-peer run`.
 
 ## Portable gent capsules
@@ -317,7 +317,7 @@ Imported pockets use their capsule's matching prepared profile and base image;
 an incompatible custom profile is refused instead of silently rebuilt from the
 checkout's unrelated global base.
 
-The destination needs Node 26+, a model-compatible Ollama server, o-gents and either
+The destination needs Node 26+, a model-compatible Ollama server, vma-gents and either
 the Apple Silicon macOS adapter or QEMU tools on Linux/macOS. The capsule
 restores the gent's prepared ARM64 guest and model without downloading those
 weights again. An x86 host emulates the ARM64 guest through QEMU TCG. The
@@ -333,8 +333,9 @@ to serve those weights and select that server when resuming.
 ## Evidence boundaries
 
 The following observations were recorded on October 4, 2026. They are historical;
-the [publication verification](publication-verification-2026-11-06.md) records
-the checks rerun for the current repository snapshot.
+the [November 6 publication verification](publication-verification-2026-11-06.md)
+and [November 17 verification](release-verification-2026-11-17.md) record later
+checks with their own scope.
 
 - The automated suite at that time passed 315/315 tests with no skips:
   `runtime/qemu-portability-20261004/npm-test-final.log`.

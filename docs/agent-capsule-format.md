@@ -1,6 +1,6 @@
 # Portable gent capsules
 
-o-gents calls each persistent VM-backed agent a **gent**. The primary commands
+vma-gents calls each persistent VM-backed agent a **gent**. The primary commands
 are `gent export`, `gent import`, and `gent clone`; the older `ovm agent ...`
 forms remain compatible. The `.ovm` extension and versioned archive/schema
 identifiers below are unchanged for compatibility.
@@ -26,14 +26,14 @@ gent import ~/my-agent.ovm private-replica --private-model
 gent clone my-agent my-other-replica
 ```
 
-The command requires an installed Node o-gents controller, Python 3 for atomic
+The command requires an installed Node vma-gents controller, Python 3 for atomic
 directory publication, and `lsof` to verify that source disks are unused.
 The guest remains ARM64 Linux. Its supported execution backends are QEMU on
 Linux/macOS and, when the Apple helper is included, Apple Virtualization on
 Apple Silicon macOS. An x86-64 Linux host runs this ARM64 guest through QEMU
 software emulation. Select the engine with `--backend qemu` or leave automatic
 host selection enabled. Model bytes and all guest disks travel with the capsule; the
-host's hypervisor, o-gents controller installation, Ollama executable, and native
+host's hypervisor, vma-gents controller installation, Ollama executable, and native
 macOS app/keyboard providers are host adapters, not embedded executables.
 The archive includes private guest data and privately supplied boot inputs.
 Keep it in private storage and transfer it only to machines you trust.
@@ -100,7 +100,7 @@ the chosen model files before reasoning can resume.
 ### Run an imported private model
 
 After `gent import ~/my-agent.ovm private-replica --private-model`, open
-two terminals in the destination's o-gents checkout. Replace `private-replica` with
+two terminals in the destination's vma-gents checkout. Replace `private-replica` with
 your imported ID; for a custom state location, use the import receipt's exact
 `privateModelsPath` instead of the path below.
 

@@ -1,4 +1,4 @@
-# o-gents prebuilt Apple Silicon launchers
+# vma-gents prebuilt Apple Silicon launchers
 
 These ad-hoc signed Mach-O executables are built from the adjacent Swift
 sources under `host/` with a deployment target of macOS 14 on ARM64:

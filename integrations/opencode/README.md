@@ -1,8 +1,9 @@
-# o-gents integration with OpenCode
+# vma-gents integration with OpenCode
 
 Copy the `claude_vm` object from `claude_vm.example.jsonc` into the OpenCode
 configuration and replace `/absolute/path/to/o-gents` with the checkout's
-physical path.
+physical path. The example retains the earlier directory name as a placeholder;
+use your actual vma-gents checkout path.
 
 `agents/vm_operator.md` is the constrained local-model operator profile. It may
 call only status and the compound lifecycle or execution transactions. Its

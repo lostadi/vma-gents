@@ -3,7 +3,7 @@
 For every command, alias, option, and complete usage examples, see the
 [complete command reference](command-reference.md).
 
-o-gents runs directly with Node.js. You do not need to compile JavaScript or
+vma-gents runs directly with Node.js. You do not need to compile JavaScript or
 TypeScript. Run these commands from your clone. The installed `gent` shortcut works from
 any directory. If the shortcut is missing, use `./bin/gent` from the checkout.
 
@@ -86,7 +86,7 @@ gent task "Inspect this guest history source. Preserve the actual records and re
 gent chat --source guest:/root/input.txt "Inspect this source before working from it"
 ```
 
-`--source guest:/absolute/path` binds an input in the gent's guest. o-gents inspects
+`--source guest:/absolute/path` binds an input in the gent's guest. vma-gents inspects
 that path before the first reasoning step of a new family and records a scoped
 fact: present, absent, unreadable, or not a regular file. A missing guest file
 does not mean the corresponding host file or another pocket's file is absent.
@@ -165,7 +165,7 @@ gent task "Run uname -m and report the observed result" --on laptop
 gent disconnect laptop
 ```
 
-For a nonstandard installation, add `--path /absolute/path/to/o-gents`.
+For a nonstandard installation, add `--path /absolute/path/to/vma-gents`.
 If Node 26+ is installed privately on that host, select its exact interpreter:
 
 ```zsh
@@ -182,7 +182,7 @@ revoke existing certificates or stop guests. Enrollment itself does not install
 the VM engine or guest image.
 
 Completed remote rounds create stopped-disk checkpoints on the initiating Mac.
-If acknowledgement is lost, o-gents retains the original dispatch and queries it on
+If acknowledgement is lost, vma-gents retains the original dispatch and queries it on
 resume; it does not replay uncertain work locally. `--local` does not bypass an
 unresolved dispatch. Modern rsync improves checkpoint transfers. Setup attempts
 an optional Homebrew rsync install when distribution is enabled and the
@@ -202,7 +202,7 @@ Sending a filename does not transfer it. The handoff budget is 256 KiB per file,
 64 blobs and 2 MiB per family; ordinary files in private VM disks are outside
 that small-artifact limit.
 
-If a decision includes a VM command and publication, o-gents runs the command and
+If a decision includes a VM command and publication, vma-gents runs the command and
 queues publication for a later controller-managed round only after that command
 succeeds. It does not rerun the command to publish. Requests and hypotheses can
 be sent alongside work as unverified intent. Reports about newly requested work
@@ -254,9 +254,9 @@ Add `--private-model` to `gent import FILE.ovm ID` to retain complete weights
 with that gent without publishing them into the host's Ollama store. Import
 does not start or qualify a model server. Follow the [private-model server
 commands](agent-capsule-format.md#run-an-imported-private-model) to start it on a
-separate loopback port and point o-gents at that server.
+separate loopback port and point vma-gents at that server.
 
-The destination needs o-gents, Node 26+, a model-compatible Ollama server, and
+The destination needs vma-gents, Node 26+, a model-compatible Ollama server, and
 either Apple Silicon macOS or QEMU tools on Linux/macOS. An imported capsule
 uses its own matching ARM64 guest base/profile; incompatible custom profiles
 are refused. It supplies guest inputs and weights, not the host VM engine or
@@ -300,7 +300,7 @@ checks; the last image reported a missing `nixbld` build-users group.
 
 Guest Ostadix is at `/opt/ostadix`, with backends at `/opt/ostadix/backends`.
 `/etc/ovm/mcp.json` configures its stdio MCP server for a client inside the guest.
-The host `npm run mcp` server controls o-gents; it is a separate server and waits
+The host `npm run mcp` server controls vma-gents; it is a separate server and waits
 for an MCP client. For client configuration, use `bin/claude-vm-mcp` directly
 to avoid package-manager banners on protocol output. See the
 [OpenCode integration](../integrations/opencode/README.md).
@@ -325,12 +325,12 @@ CLI/server was 0.33.2 and could not load Spark. Use `ollama serve` only after
 verifying that the CLI installation also supplies a compatible server; leave
 that terminal open and use another for setup. If a compatible server is already
 running, keep it rather than starting a competing one.
-With access to the private repository, clone the source without any host's
-private `runtime/` and `vm/` state:
+Clone the public source. Guest disks and controller state are created locally
+and stay outside Git:
 
 ```zsh
-git clone git@github.com:lostadi/o-gents.git
-cd o-gents
+git clone https://github.com/lostadi/vma-gents.git
+cd vma-gents
 ./setup.sh
 ./bin/gent check
 ./bin/gent chat "Run uname -m and report its output"
@@ -343,7 +343,7 @@ inputs must match the qualified profile in [compatibility](../compatibility/READ
 An existing bundle is not recloned. Optional Swift rebuilding uses
 `npm run build:native` and Xcode Command Line Tools. Daily use needs no
 TypeScript or JavaScript compilation; Node executes `.mjs` directly. `index.ts`
-is a separate demonstration and is not o-gents's entrypoint.
+is a separate demonstration and is not vma-gents's entrypoint.
 
 Ostadix and its MCP are bundled guest capabilities. The host application needs
 Node and its selected VM backend; ordinary `gent` use does not depend on a host
@@ -357,7 +357,7 @@ listed above. Copy the source checkout and your private `.ovm` capsule to the
 destination. With Node 26+ on PATH and Ollama running:
 
 ```bash
-cd /absolute/path/to/o-gents
+cd /absolute/path/to/vma-gents
 node --version
 npm ci
 ./bin/gent import ~/my-agent.ovm my-imported-agent
@@ -376,6 +376,7 @@ results below distinguish this from cross-host networking and placement tests.
 ## Troubleshooting and rollback
 
 - Command missing: run `./bin/gent` from the checkout; ensure `~/.local/bin` is on PATH.
+- Policy permissions: the normal MCP route rejects a `policy.json` writable by a group or other users. For your own checkout, use `chmod go-w policy.json`; `umask 022` gives new local files the expected permissions.
 - Blank terminal after launching MCP: press Ctrl+C, then run `gent chat`. MCP waits for client protocol messages.
 - Missing saved gent: run `gent list` and use an existing ID, or create one with `gent chat --swarm-id NAME` and send a message before leaving.
 - Missing model/server: start the compatible app with `open -a Ollama`, run `gent setup`, then try `gent chat --text "Reply with ready"`.

@@ -1,11 +1,11 @@
-# o-gents complete command reference and use guide
+# vma-gents complete command reference and use guide
 
-Checked against this checkout's CLI help and parsers on 2026-10-04.
+Checked against this checkout's CLI help and parsers on November 17, 2026.
 Run commands in Terminal or Warp. No JavaScript or TypeScript compilation is
-needed. On Lee's Mac, `gent` is installed at `~/.local/bin/gent` and points to
-`/path/to/vma-gents/bin/gent`.
+needed. Setup installs `gent` in `~/.local/bin`; use `./bin/gent` from the
+checkout if that directory is not on PATH.
 
-This reference covers the public o-gents commands, aliases, daily options, model
+This reference covers the public vma-gents commands, aliases, daily options, model
 settings, saved gents, and advanced launchers. Host-installed Ostadix and
 Ollama have their own command catalogs. The setup walkthrough is in
 [getting-started.md](getting-started.md); full capsule details are in
@@ -19,7 +19,7 @@ and `.ovm` archives retain their technical names.
 
 ## 1. Start using this installation
 
-The current Mac is already set up. Start with:
+After setup on a compatible host, start with:
 
 ```bash
 gent check
@@ -146,7 +146,7 @@ gent task "Inspect the actual history in order; report missing data without inve
 gent task "Create a parser, publish its real file, and have another gent inspect the exact bytes and test it" --agents 3 --rounds 8
 ```
 
-The guest's history is not your Mac terminal history. A host file needs an
+The guest's history is separate from your host terminal history. A host file needs an
 explicit handoff into the intended guest. Each pocket has its own filesystem;
 the same pathname in two pockets need not identify the same file. Published
 artifacts carry bytes, digests and provenance and appear read-only under
@@ -195,7 +195,7 @@ gent export parser-work ~/parser-work.ovm
 ```
 
 Copy `~/parser-work.ovm` to the destination with your normal file transfer, then
-run there from an installed o-gents controller:
+run there from an installed vma-gents controller:
 
 ```bash
 gent import ~/parser-work.ovm parser-copy
@@ -204,7 +204,7 @@ gent chat --resume parser-copy
 
 Weights are always included. Import retains original history separately and
 creates a new instance identity; it neither replays old commands nor starts
-Ollama or a VM. Host VM engines, the o-gents controller and Ollama executable remain
+Ollama or a VM. Host VM engines, the vma-gents controller and Ollama executable remain
 host prerequisites. If a remote outcome is unresolved, resume to reconcile it
 before exporting or cloning. See [capsule format and private-model serving](agent-capsule-format.md).
 
@@ -232,7 +232,7 @@ gent peers
 gent peers --json
 gent peers --discover
 gent connect USER@HOST --name laptop
-gent connect USER@HOST --name laptop --path /absolute/path/to/o-gents --node /absolute/path/to/node
+gent connect USER@HOST --name laptop --path /absolute/path/to/vma-gents --node /absolute/path/to/node
 gent task "Run uname -m and report the result" --on rack
 gent chat --on rack
 gent disconnect laptop
@@ -301,8 +301,8 @@ npm run model:chat
 ```
 
 `model:setup` downloads the Spark Q4_K_M GGUF and creates
-`huihui-spark-vm:32k`. Use the already qualified Spark-compatible Ollama server;
-on this Mac `open -a Ollama` starts the app installation. `model:chat` is plain
+`huihui-spark-vm:32k`. Use a Spark-compatible Ollama server;
+on macOS, `open -a Ollama` starts the app installation. `model:chat` is plain
 Ollama conversation. Private imported weights need a server pointed at their
 `capsule-models` directory; [exact commands are here](agent-capsule-format.md#run-an-imported-private-model).
 
@@ -333,14 +333,14 @@ that every named deliverable was saved correctly.
 | Situation | Command / action |
 | --- | --- |
 | Need setup diagnosis | `gent check` |
-| Missing or stopped model server on this Mac | `open -a Ollama`, then `gent check` |
+| Missing or stopped model server on macOS | `open -a Ollama`, then `gent check` |
 | Want to see saved gents | `gent list` |
 | Round limit reached | `gent resume ID --rounds 8` |
 | Continue conversationally | `gent chat --resume ID` |
 | Slow inference | `OVM_MODEL_TIMEOUT_SECONDS=300 gent chat --resume ID` |
 | Optional distribution unavailable | `gent mode auto` or a new `gent task "..." --local` |
 | Need disconnected guest | `gent task "..." --isolated` |
-| Remote result uncertain | Resume the same ID and let o-gents reconcile the original dispatch; do not make an independent replay. |
+| Remote result uncertain | Resume the same ID and let vma-gents reconcile the original dispatch; do not make an independent replay. |
 | Want to copy a gent | End its active turn, then `gent clone ID NEW_ID`. |
 
 Task exit 0 means its runtime completion checks passed; exit 2 means unfinished
@@ -469,6 +469,41 @@ host's qualified providers and permissions.
 
 Use help as the **first** native argument: `gent native --help`. Adding help
 after an actual call does not suppress that call.
+
+### Dedicated research browser
+
+`gent browser` accepts one JSON argument. This separate route requires a
+prepared Apple Silicon VM controller; it does not use QEMU or a task's gent.
+
+```bash
+gent browser '{"operation":"status"}'
+gent browser '{"operation":"setup"}'
+gent browser '{"operation":"browse","session":"research","url":"https://example.com","max_chars":12000}'
+gent browser '{"operation":"stop"}'
+```
+
+Setup installs the pinned Playwright/Chromium environment in the dedicated
+`aichat-research` pocket and checks JavaScript and Ostadix execution. Browse
+boots and stops that VM for each call. Its profile, cookies, local storage, and
+last URL persist; its page DOM and running processes restart. The VM uses
+2 vCPUs and 2 GiB RAM, with another 1 GiB of available host memory required.
+Disk admission also applies. A status receipt reports readiness and blockers;
+it does not navigate a page.
+
+Browse accepts up to ten actions: `goto`, `click`, `fill`, `press`, `select`,
+`wait`, or `scroll`. For example:
+
+```bash
+gent browser '{"operation":"browse","session":"research","url":"https://example.com","actions":[{"type":"click","role":"link","name":"Learn more"}]}'
+```
+
+The CLI always returns JSON and exits 0, including on failure. Inspect `status`,
+`isError`, and `uncertain` in the receipt. `stop` requests cooperative cancellation;
+poll status to confirm shutdown. An uncertain result can mean an action already
+executed, so inspect the retained log before repeating it. This command does
+not implement a `--help` flag. Its current request contract is in
+[`src/research-browser.mjs`](../src/research-browser.mjs) and
+[`guest/research-browser.mjs`](../guest/research-browser.mjs).
 
 ### Direct built-in VM and diagnostic commands
 
@@ -644,7 +679,7 @@ For normal gent work use `gent task "your task"` with explicit placement options
 
 ## 9. Developer/package commands
 
-These run from the o-gents checkout. They do not require you to write JavaScript:
+These run from the vma-gents checkout. They do not require you to write JavaScript:
 
 | Command | Purpose |
 | --- | --- |

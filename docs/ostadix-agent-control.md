@@ -1,14 +1,14 @@
 # Ostadix actions and peer review
 
-o-gents gives a gent a structured way to check and run exact `.O` source in its
+vma-gents gives a gent a structured way to check and run exact `.O` source in its
 own VM, publish the successful source, and ask a different gent to rerun its
 original output checks. The local model chooses actions; the controller checks
 their shape, records results, and enforces completion rules. A prompt or model
 summary alone is never a verification receipt.
 
 `gent` remains the daily CLI; `ovm` compatibility commands, `OVM_*` settings,
-saved-state schemas, and `.ovm` capsules retain their names. This feature belongs
-to the private `lostadi/o-gents` project. Ordinary VM shell actions and VM chat
+saved-state schemas, and `.ovm` capsules retain their names. This feature is included in the public
+[`lostadi/vma-gents`](https://github.com/lostadi/vma-gents) source. Ordinary VM shell actions and VM chat
 remain available, and plain `gent chat --text` does not execute these actions.
 
 ## Try a two-gent task

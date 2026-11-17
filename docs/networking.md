@@ -21,10 +21,10 @@ gent chat --on laptop                   # Start a VM chat on this connected host
 gent disconnect laptop
 ```
 
-Prepare o-gents on the destination and verify its existing SSH login. Apple Silicon
+Prepare vma-gents on the destination and verify its existing SSH login. Apple Silicon
 hosts can use `gent setup`; Linux/QEMU hosts need `qemu-system-aarch64`, `mke2fs`
 (e2fsprogs), `python3`, `lsof`, and a transferred verified prepared ARM64 guest.
-Both need Node 26+ and rsync. Add `--path /absolute/path/to/o-gents` if o-gents
+Both need Node 26+ and rsync. Add `--path /absolute/path/to/vma-gents` if vma-gents
 is not in its usual location, and `--node /absolute/path/to/node` for a privately
 installed Node 26+ interpreter. For example:
 
@@ -41,8 +41,8 @@ them. Disconnect removes future placement, not existing certificates.
 
 `gent mode local` keeps internet access, runtimes, files and local multi-gent
 operation. `gent mode required` requires a compatible remote host and mesh for
-gent tasks; direct shell and normal MCP launches remain on this Mac and require
-the mesh. `--on NAME` is an explicit destination and does not silently fall back.
+gent tasks; direct shell and normal MCP launches remain on the initiating Apple
+Silicon Mac and require the mesh. `--on NAME` is an explicit destination and does not silently fall back.
 `--isolated` means no network access and should be used only when that is wanted.
 
 Host-to-host VM control uses SSH and durable dispatch receipts. The initiating
@@ -56,7 +56,7 @@ native `ovm-peer` execution.
 A remote round has a 30-minute completion deadline, allowing Linux disk copies,
 guest startup, and the stopped snapshot to finish. Individual SSH connection
 and status requests retain short timeouts; checkpoint transfer has its own
-30-minute deadline. If completion is still unknown at the deadline, o-gents keeps
+30-minute deadline. If completion is still unknown at the deadline, vma-gents keeps
 the dispatch for resume and does not replay it locally or cancel the remote
 work. Snapshot payloads are released only after the initiating controller has
 durably saved their checkpoint and completion receipt; live gent disks remain.
@@ -109,7 +109,7 @@ Their socket list and route table do not represent the root guest's network.
 The root service and native `o-node` use the shared guest network; peer
 execution is verified from another VM.
 
-The controller prefers the host's existing Tailscale address for the Nebula lighthouse. Other machines on the same tailnet can reach it without exposing a public Internet port. o-gents does not enroll hosts into Tailscale or change tailnet permissions. The lighthouse host must remain online, and the tailnet must permit UDP 4242 to it.
+The controller prefers the host's existing Tailscale address for the Nebula lighthouse. Other machines on the same tailnet can reach it without exposing a public Internet port. vma-gents does not enroll hosts into Tailscale or change tailnet permissions. The lighthouse host must remain online, and the tailnet must permit UDP 4242 to it.
 
 ```bash
 gent network create
@@ -142,10 +142,10 @@ gent network export second-mac --out ~/second-mac-ovm-network.json
 scp ~/second-mac-ovm-network.json USER@YOUR_OTHER_MAC:~/
 ```
 
-Replace `YOUR_OTHER_MAC` with the receiving Mac's Tailscale hostname or IP. Use a fresh o-gents source checkout or copy on that Mac; exclude `runtime/network/` when copying from another machine, because it contains that machine's controller credentials. Join **before running setup**, since setup creates a separate network when none is selected:
+Replace `YOUR_OTHER_MAC` with the receiving Mac's Tailscale hostname or IP. Use a fresh vma-gents source checkout or copy on that Mac; exclude `runtime/network/` when copying from another machine, because it contains that machine's controller credentials. Join **before running setup**, since setup creates a separate network when none is selected:
 
 ```bash
-cd ~/o-gents
+cd ~/vma-gents
 ./bin/gent network join ~/second-mac-ovm-network.json
 ./bin/gent setup
 ./bin/gent network status --json
@@ -159,7 +159,7 @@ guest. Linux can also participate as a separately configured Nebula endpoint
 and native `o-node` host; creating its host TUN interface requires appropriate
 Linux privileges. Guests create their own TUN interfaces inside their VMs.
 
-The export is a private file containing **CA signing authority** so your other controller can create certificates for its own new VMs without an online enrollment service. Transfer it only to your trusted machines. Each export belongs to one controller; run `export` again for each additional machine to allocate a distinct address block. Imported controllers cannot export further controller allocations. o-gents refuses to overwrite an existing network on `join`.
+The export is a private file containing **CA signing authority** so your other controller can create certificates for its own new VMs without an online enrollment service. Transfer it only to your trusted machines. Each export belongs to one controller; run `export` again for each additional machine to allocate a distinct address block. Imported controllers cannot export further controller allocations. vma-gents refuses to overwrite an existing network on `join`.
 
 ### Join from a machine that already has its own network
 
@@ -194,7 +194,7 @@ ovm-peer run 10.87.1.2 /work/task.O
 
 `run` pairs automatically when needed, then delegates execution to native `octl node run`. It never retries a remote execution whose completion might be unknown. Each guest retains its own native TLS and receipt-signing keys. The enrollment service listens only on its Nebula address, on TCP 7341; it starts one expiring native pairing offer at a time on TCP 7340 and transmits the one-use passcode inside the authenticated, encrypted Nebula connection. It never enables `o-node --lan-open` or publishes a shared node private key.
 
-Membership in this o-gents network grants peers permission to enroll for native Ostadix execution on one another. This implements the shared-access behavior requested for the VM fleet. The guest enrollment service rejects requests from outside the overlay and requests for a different network ID.
+Membership in this vma-gents network grants peers permission to enroll for native Ostadix execution on one another. This implements the shared-access behavior requested for the VM fleet. The guest enrollment service rejects requests from outside the overlay and requests for a different network ID.
 
 `list` reports issued identities from this controller, including stopped guests; it does not claim they are online. The host refreshes the mounted `peers.json` files as new guests and descendants receive identities. For a VM created by another controller, use its overlay IP directly; registry replication between controllers is not implemented.
 
@@ -215,9 +215,14 @@ o-node status
 
 The implementation pins Nebula 1.11.2 and checks the official archive SHA-256 before installing host binaries. Useful upstream references: [release artifacts](https://github.com/slackhq/nebula/releases/tag/v1.11.2), [unprivileged lighthouse TUN setting](https://nebula.defined.net/docs/config/tun/), [relay behavior](https://nebula.defined.net/docs/config/relay/), and [NAT traversal](https://nebula.defined.net/docs/config/punchy/).
 
-## Observed verification on this checkout
+## Historical verification, October 4, 2026
 
-The current automated suite passed **315/315 tests with no skips**:
+The observations below describe the October 4 development checkout. The ignored
+private receipts are not included in this public repository. See the
+[November 17 verification](release-verification-2026-11-17.md) for checks run on
+the current source snapshot.
+
+The automated suite at that time passed **315/315 tests with no skips**:
 `runtime/qemu-portability-20261004/npm-test-final.log`.
 
 Local QEMU HVF validation passed: a parent/child pair used distinct network

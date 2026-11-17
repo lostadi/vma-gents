@@ -20,19 +20,19 @@
 
 **An agent with a VM of its own. Each one is a gent.**
 
-I want a local agent to have somewhere to work: a machine, files that survive
-the conversation, and a way to run what it writes. If another agent checks its
-work, that agent should be able to execute it and inspect the result.
+I built vma-gents to give local agents a persistent place to work. Each gent has
+its own Linux environment, saved files, and conversation history. It can write a
+program, run it, inspect the result, and continue the same work later.
 
-vma-gents gives local agents persistent Linux environments. A gent can write
-programs, run them, keep its state, and pick up where it stopped. Several gents
-can exchange actual artifacts and rerun each other's work in separate VMs.
+Several gents can exchange captured artifacts and rerun each other's work in
+separate VMs. The controller keeps the source, checks, and observed results so
+that a review can refer to what actually ran.
 [Ostadix](https://github.com/lostadi/OSTADIX) provides structured polyglot
 execution with retained source, checks, and execution records.
 
-The point is to give small local models a useful working environment. Better
-tools and feedback are worth building. How far a given model can take them is
-something to measure.
+The effect of persistent environments and executable feedback needs to be
+measured for the model and task being used. Peer execution records make those
+checks inspectable; they do not establish a general improvement in model quality.
 
 | | What a gent gets |
 | :--- | :--- |
@@ -45,8 +45,8 @@ something to measure.
 ## Run it
 
 **Fresh guest setup requires Apple Silicon, macOS 14+, Node.js 26+, npm,
-and a running Ollama server with its CLI on PATH.** It also requires compatible
-local Claude Desktop VM inputs, as listed in the
+and a running Ollama server with its CLI on PATH.** Node and Ollama must already
+be installed. You also need compatible local Claude Desktop VM inputs, listed in the
 [compatibility profile](compatibility/claude-desktop.json). Those private disks
 and helper images are obtained locally; they are not included in this repository.
 
@@ -63,8 +63,7 @@ cd vma-gents
 Setup installs the application dependencies and default model, prepares the
 guest's Ostadix environment and language runtimes, and installs the `gent`
 shortcut in `~/.local/bin`. The first guest build can take tens of minutes.
-Node and Ollama must already be installed. If the shortcut is not on your PATH,
-keep using `./bin/gent` from the checkout.
+Use `./bin/gent` from the checkout if the shortcut is not on your PATH.
 
 For nonstandard private input locations, set `CLAUDE_VM_SOURCE_BUNDLE` and
 `CLAUDE_VM_SMOL_SOURCE` before setup. An incompatible helper is rejected; see
@@ -207,7 +206,7 @@ controllers.
 | [`integrations/`](integrations/) | Ostadix and OpenCode/MCP entrypoints. |
 | [`examples/`](examples/) · [`test/`](test/) | Task specifications, programs, and automated checks. |
 
-The [research browser source](src/research-browser.mjs) and
+The [dedicated research browser](docs/command-reference.md#dedicated-research-browser) and
 [host web search](docs/agent-pockets.md#host-web-search) are included.
 Private VM images, model weights, saved gents,
 credentials, and private native add-ons stay outside Git. This repository alone
@@ -224,6 +223,7 @@ runner has its own [resource and readiness rules](docs/apple-mcp-runner.md).
 - [Command reference](docs/command-reference.md) — commands, flags, and aliases.
 - [Ostadix actions and peer review](docs/ostadix-agent-control.md) — source, intent, evidence, and completion contracts.
 - [Gents and persistent VM pockets](docs/agent-pockets.md) — controller architecture and action protocol.
+- [Verification, November 17, 2026](docs/release-verification-2026-11-17.md) — current Linux checks, dependency audit, and platform limits.
 - [Publication verification, November 6, 2026](docs/publication-verification-2026-11-06.md) — checks performed for this repository snapshot.
 - [Manual verification, October 4, 2026](docs/manual-verification-2026-10-04.md) · [Setup verification, October 5, 2026](docs/setup-verification-2026-10-05.md) — earlier observations, with their original scope and limits.
 

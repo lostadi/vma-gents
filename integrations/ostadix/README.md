@@ -1,4 +1,4 @@
-# Optional o-gents integration with Ostadix
+# Optional vma-gents integration with Ostadix
 
 These optional `.O` programs preserve the independent lifecycle receipts used
 by `o open vm` and `o open vm-exec`. `pocket_swarm.O` launches the communicating
@@ -17,7 +17,7 @@ They discover Node from `PATH` and accept these environment overrides:
 
 Install or link the programs into the local Ostadix terminal integration, then
 dispatch them through `O` with the canonical absolute backends directory. The
-o-gents MCP and CLI remain usable without host Ostadix; these programs add independent
+vma-gents MCP and CLI remain usable without host Ostadix; these programs add independent
 Ostadix-owned cleanup and source-identity receipts.
 
 Example:

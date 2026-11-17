@@ -123,7 +123,8 @@ their selected backend and the separate [pocket protocol](agent-pockets.md).
   and returned as explicitly untrusted guest text.
 - The supplied `vm_operator` profile allows only status and the compound lifecycle/execution tools. Primary-agent restrictions must be configured in the MCP client.
 
-Do not redistribute Claude's disk image, guest software, or helper image. This is a private interoperability experiment.
+Claude's disk image, guest software, and helper image are private local inputs.
+They are excluded from this public source repository and its releases.
 
 
 ## MCP tools
